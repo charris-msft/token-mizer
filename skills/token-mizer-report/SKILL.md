@@ -37,13 +37,17 @@ SELECT model,
        AVG(60000.0 * output_tokens / duration_ms) AS mean_per_call_output_tpm,
        60000.0 * SUM(output_tokens) / SUM(duration_ms) AS pooled_overall_output_tpm
 FROM assistant_usage_events
-WHERE substr(created_at, 1, 10) BETWEEN '2026-09-01' AND '2026-09-08'
+WHERE substr(created_at, 1, 10) BETWEEN '2026-08-31' AND '2026-09-09'
+  AND julianday(created_at) >= julianday('2026-09-01T00:00:00Z')
+  AND julianday(created_at) < julianday('2026-09-08T00:00:00Z')
   AND model LIKE '%opus%'
   AND agent_id IS NULL
   AND api_endpoint IS NOT NULL
   AND output_tokens > 0
   AND duration_ms > 0
-GROUP BY model;
+GROUP BY model
+ORDER BY model
+LIMIT 100;
 ```
 
 Use the helper when exact timestamp cutoffs, normalized mixed SQLite/ISO timestamps, exclusion counts, JSON output, or provider attribution matter.
@@ -56,7 +60,13 @@ Label these as different averages:
 - **Pooled overall output TPM:** `60000 * SUM(output_tokens) / SUM(duration_ms)` weights requests by their recorded duration.
 - **Output tokens/second:** divide TPM by 60; keep mean and pooled variants separate.
 
-These describe observed output throughput over recorded request duration. They are not configured TPM quota, total prompt-token processing, or pure streaming decode speed. Report calls, distinct sessions, exact window, exclusions, and source. Reasoning effort, request size, dates, and workload can differ, so do not claim controlled provider causality.
+Keep three different measurements separate:
+
+1. **Per-call output rates:** the mean and pooled output TPM above, measured over recorded request durations.
+2. **Deployment wall-clock TPM:** aggregate input plus output tokens across all concurrent requests in each real one-minute interval. When explicitly requested and already authorized, Azure Monitor `TokenTransaction`, `ProcessedPromptTokens`, and `GeneratedTokens` with interval `PT1M` and a `ModelDeploymentName` filter can measure aggregate peaks without an LLM call.
+3. **Quota-enforcement estimates:** remaining-token or rate-limit headers and service enforcement state. Estimates can include output caps and differ from recorded or billed token counts.
+
+These are not interchangeable. Monitor aggregates do not prove the exact service-side throttle calculation. Report calls, distinct sessions, exact window, exclusions, and source. Reasoning effort, request size, dates, workload, and concurrency can differ, so do not claim controlled provider causality.
 
 Never calculate from assistant response length, sum cumulative session counters as if they were per-call records, infer currency from multipliers, count missing duration as zero, or mix main-agent requests with subagent or aggregate rollups.
 
@@ -71,9 +81,22 @@ synthetic-opus       12         4                    3600.0                     
 
 Do not infer provider from `api_endpoint`; `/responses` and `ws:/responses` are not provider proof. Current session state cannot identify historical calls after model switches.
 
-Only when provider comparison is requested, run the helper with `--provider-attribution metadata`. For session IDs already selected by the bounded SQL, stream only `session.start` `data.selectedModel` and `session.model_change` `data.newModel` metadata from `session-state/<session_id>/events.jsonl`. Match each main-agent usage row to the last preceding selection for that model. Resolve a qualified connection ID through read-only `data.db` table `model_providers(id, name, type)` without reading `settings_json` or secrets. A bare selected model with positive Copilot AI-credit evidence is `GitHub billed`; otherwise label it `unknown`. Never inherit a parent selection for subagent rows.
+Only when provider comparison is requested, run the helper with `--provider-attribution metadata`. For session IDs already selected by the bounded SQL, stream only `session.start` `data.selectedModel` and `session.model_change` `data.newModel` metadata from `session-state/<session_id>/events.jsonl`. Treat usage `created_at` as request completion: compute request start from `duration_ms`, choose the latest selection across all models at request start, then require its model to match the usage row. A selection change during the recorded request, missing history, or malformed relevant metadata makes attribution `unknown`. Resolve a qualified connection ID through read-only `data.db` table `model_providers(id, name, type)` without reading `settings_json` or secrets. A bare selected model with positive Copilot AI-credit evidence is `GitHub billed`; otherwise label it `unknown`. Never inherit a parent selection for subagent rows.
 
 Offer the default unclassified mode when provider comparison is unnecessary or history is missing. Do not recursively scan all session histories. A shared connection does not prove shared quota, and measured throughput must remain separate from configured deployment limits.
+
+## Routing effectiveness
+
+For an effectiveness report, supplement throughput with time-bounded structured session and tool evidence. Keep policy eligibility separate from observed behavior and report:
+
+- tasks and route distribution across Sol, Luna, Astra, and explicitly approved GitHub fallback;
+- completion and failure proxies, separating authentication/environment, throttling/capacity, tool, test, and reasoning failures;
+- median and p90 duration when timestamps are reliable;
+- input, output, cache, retry, and duplicate-worker evidence when available;
+- paid-route eligibility, approval, and actual paid use as three distinct states;
+- first-fix success and post-failure Astra escalation when evidence supports them.
+
+Authentication or unavailable-provider errors require login/environment recovery and are not quota evidence. For explicit 429, TPM, quota, or documented throttling, check bounded retries, `Retry-After`, one active worker per constrained connection, checkpoint reuse, and coordinator yielding. Do not infer success from the final assistant message, billing from multipliers, or causal routing improvements from small uncontrolled samples. If structured evidence or attribution is unavailable, name the missing capability and stop rather than reconstructing private prompts.
 
 ## Privacy and output
 

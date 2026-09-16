@@ -10,7 +10,7 @@ import sqlite3
 import sys
 from collections import defaultdict
 from contextlib import closing
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
 from urllib.parse import quote
@@ -81,6 +81,8 @@ def fetch_usage_rows(
     if end <= start:
         raise ReportUnavailable("end cutoff must be after start cutoff")
     validate_usage_schema(connection)
+    coarse_start = (start - timedelta(days=1)).date().isoformat()
+    coarse_end = (end + timedelta(days=1)).date().isoformat()
     return list(
         connection.execute(
             f"""
@@ -90,7 +92,7 @@ def fetch_usage_rows(
             WHERE substr(created_at, 1, 10) BETWEEN ? AND ?
               AND model LIKE ?
             """,
-            (start.date().isoformat(), end.date().isoformat(), model_like),
+            (coarse_start, coarse_end, model_like),
         )
     )
 
@@ -151,36 +153,55 @@ def selected_model(value: Any) -> str | None:
     return None
 
 
-def load_session_selections(events_path: Path) -> list[tuple[datetime, str]]:
+def load_session_selections(
+    events_path: Path,
+) -> tuple[list[tuple[datetime, str]], list[datetime | None]]:
     selections: list[tuple[datetime, str]] = []
+    invalid_events: list[datetime | None] = []
     if not events_path.is_file():
-        return selections
+        return selections, invalid_events
     try:
         with events_path.open("r", encoding="utf-8") as stream:
             for line in stream:
+                if "session.start" not in line and "session.model_change" not in line:
+                    continue
                 try:
                     event = json.loads(line)
                 except (json.JSONDecodeError, UnicodeDecodeError):
+                    invalid_events.append(None)
+                    continue
+                if not isinstance(event, dict):
+                    invalid_events.append(None)
                     continue
                 event_type = event.get("type")
-                data = event.get("data") or {}
-                if event_type == "session.start":
-                    value = data.get("selectedModel")
-                elif event_type == "session.model_change":
-                    value = data.get("newModel")
-                else:
+                if event_type not in {"session.start", "session.model_change"}:
                     continue
+                data = event.get("data")
+                if not isinstance(data, dict):
+                    invalid_events.append(None)
+                    continue
+                value = (
+                    data.get("selectedModel")
+                    if event_type == "session.start"
+                    else data.get("newModel")
+                )
                 model = selected_model(value)
                 timestamp_value = event.get("timestamp") or data.get("timestamp")
-                if not model or not timestamp_value:
-                    continue
                 try:
-                    selections.append((parse_timestamp(timestamp_value), model))
+                    timestamp = parse_timestamp(timestamp_value)
                 except (TypeError, ValueError):
+                    invalid_events.append(None)
                     continue
+                if not model:
+                    invalid_events.append(timestamp)
+                    continue
+                selections.append((timestamp, model))
     except OSError:
-        return []
-    return sorted(selections, key=lambda item: item[0])
+        return [], [None]
+    return (
+        sorted(selections, key=lambda item: item[0]),
+        sorted(invalid_events, key=lambda item: item or datetime.min.replace(tzinfo=timezone.utc)),
+    )
 
 
 def load_provider_catalog(data_db: Path | None) -> dict[str, tuple[str, str]]:
@@ -217,16 +238,33 @@ def attribute_providers(
 
     for session_id, session_rows in by_session.items():
         events_path = session_events_path(session_state, session_id)
-        events = load_session_selections(events_path) if events_path else []
+        events, invalid_events = (
+            load_session_selections(events_path) if events_path else ([], [None])
+        )
         for row in session_rows:
-            matching = [
-                model
-                for timestamp, model in events
-                if timestamp <= row["created_at"]
-                and model_basename(model) == model_basename(row["model"])
+            completion = row["created_at"]
+            try:
+                request_start = completion - timedelta(milliseconds=row["duration_ms"])
+            except (OverflowError, TypeError, ValueError):
+                row["provider"] = "unknown"
+                continue
+            metadata_uncertain = any(
+                timestamp is None or timestamp <= completion
+                for timestamp in invalid_events
+            )
+            changed_during_request = any(
+                request_start < timestamp <= completion for timestamp, _ in events
+            )
+            preceding = [
+                model for timestamp, model in events if timestamp <= request_start
             ]
-            selection = matching[-1] if matching else None
-            if selection is None:
+            selection = preceding[-1] if preceding else None
+            if (
+                metadata_uncertain
+                or changed_during_request
+                or selection is None
+                or model_basename(selection) != model_basename(row["model"])
+            ):
                 row["provider"] = "unknown"
             elif "/" not in selection:
                 row["provider"] = (

@@ -109,11 +109,13 @@ The default cohort is qualifying productive main-agent API records: `agent_id IS
 - **Mean per-call output TPM:** average of each call's `60000 × output_tokens ÷ duration_ms`.
 - **Pooled overall output TPM:** `60000 × total output tokens ÷ total duration`.
 
-These values measure observed output throughput over recorded request duration. They are not configured TPM quota, total prompt-token processing, or pure streaming decode speed. Reports include calls, sessions, window, source, and exclusions. They do not infer billing from multipliers or claim controlled provider causality across different workloads.
+These per-call output rates are separate from deployment wall-clock TPM, which aggregates input plus output across concurrent requests in each real minute, and from quota-enforcement estimates or remaining-token headers. Azure Monitor `TokenTransaction`, `ProcessedPromptTokens`, and `GeneratedTokens` at `PT1M`, filtered by `ModelDeploymentName`, can measure aggregate peaks when explicitly requested without an LLM call. Quota estimates can include output caps and differ from recorded or billed tokens; monitor metrics do not prove the exact throttle calculation. Reports include calls, sessions, window, source, and exclusions. They do not infer billing from multipliers or claim controlled provider causality across different workloads.
 
-Provider attribution is off by default. Add `--provider-attribution metadata` only when needed. It reads model-selection metadata for the SQL-selected session IDs, resolves provider names from read-only `data.db`, and labels missing evidence `unknown`. It never treats an API endpoint as provider proof or scans all histories recursively.
+Provider attribution is off by default. Add `--provider-attribution metadata` only when needed. It reads only model-selection metadata for the SQL-selected session IDs. Treating `created_at` as request completion, it requires the latest selection at request start to match the usage model and labels in-request changes, malformed metadata, or missing evidence `unknown`. It resolves provider names from read-only `data.db`, never treats an API endpoint as provider proof, and never scans all histories recursively.
 
-The helper opens SQLite in read-only URI mode, introspects required columns, uses parameterized SQL, and performs no uploads, installs, database writes, policy writes, or LLM calls. Missing databases or fields produce an honest `UNAVAILABLE` result.
+Routing-effectiveness reports retain the broader evidence checks: route distribution, outcome and failure classes, latency, retries, duplicate workers, paid-route eligibility versus approval versus observed use, first-fix success, and post-failure Astra escalation. Authentication/environment failures stay separate from throttling or quota evidence, and conclusions remain bounded by available structured evidence.
+
+The helper opens SQLite in read-only URI mode, introspects required columns, uses parameterized SQL, widens only its coarse date candidate range for timezone offsets, and then applies exact inclusive-start/exclusive-end UTC filtering. It performs no uploads, installs, database writes, policy writes, or LLM calls. Missing databases or fields produce an honest `UNAVAILABLE` result.
 
 Synthetic output example:
 
