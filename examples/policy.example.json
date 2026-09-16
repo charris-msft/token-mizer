@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "validFrom": "2026-01-01",
+  "validThrough": "2026-01-31",
+  "timeZone": "America/Los_Angeles",
+  "weekdayAllowanceUsd": 0,
+  "weekendAllowanceUsd": 0,
+  "perTaskAllowanceUsd": 0,
+  "approvalOnlyReserveUsd": 0,
+  "notes": "Replace dates and amounts locally. Zero values keep paid fallback disabled. Never commit your real policy."
+}
