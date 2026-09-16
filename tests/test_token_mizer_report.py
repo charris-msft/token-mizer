@@ -96,14 +96,18 @@ class TokenMizerReportTests(unittest.TestCase):
         )
 
     def test_timestamp_normalization_and_exclusive_cutoff(self):
-        self.add_usage(session_id="sqlite", created_at="2026-09-01 00:00:00")
-        self.add_usage(session_id="offset", created_at="2026-09-01T01:00:00+01:00")
-        self.add_usage(session_id="cutoff", created_at="2026-09-02T00:00:00Z")
+        self.add_usage(session_id="sqlite-start", created_at="2026-09-01 00:00:00")
+        self.add_usage(session_id="offset-start", created_at="2026-08-31T19:00:00-05:00")
+        self.add_usage(session_id="offset-from-prior-date", created_at="2026-08-31T23:30:00-01:00")
+        self.add_usage(session_id="offset-from-next-date", created_at="2026-09-02T00:30:00+01:00")
+        self.add_usage(session_id="before-start", created_at="2026-08-31T18:59:59-05:00")
+        self.add_usage(session_id="end-cutoff", created_at="2026-09-01T19:00:00-05:00")
 
         result = self.report()
 
-        self.assertEqual(result["qualifying_records"], 2)
-        self.assertEqual(result["exclusions"]["outside_exact_window"], 1)
+        self.assertEqual(result["qualifying_records"], 4)
+        self.assertEqual(result["candidate_records"], 6)
+        self.assertEqual(result["exclusions"]["outside_exact_window"], 2)
 
     def test_excludes_invalid_duration_subagent_aggregate_and_nonpositive_output(self):
         self.add_usage(session_id="valid")
@@ -212,6 +216,99 @@ class TokenMizerReportTests(unittest.TestCase):
         self.assertNotIn("provider-synthetic", serialized)
         self.assertNotIn("PRIVATE PROMPT", serialized)
         self.assertNotIn("SECRET", serialized)
+
+    def test_latest_selection_for_different_model_does_not_resurrect_stale_provider(self):
+        self.add_usage(
+            session_id="different-model",
+            created_at="2026-09-01T00:30:00Z",
+            duration_ms=60_000,
+            total_nano_aiu=0,
+        )
+        event_dir = self.session_state / "different-model"
+        event_dir.mkdir(parents=True)
+        events = [
+            {
+                "type": "session.start",
+                "timestamp": "2026-09-01T00:00:00Z",
+                "data": {"selectedModel": "provider-synthetic/synthetic-opus"},
+            },
+            {
+                "type": "session.model_change",
+                "timestamp": "2026-09-01T00:20:00Z",
+                "data": {"newModel": "synthetic-sol"},
+            },
+        ]
+        (event_dir / "events.jsonl").write_text(
+            "\n".join(json.dumps(event) for event in events), encoding="utf-8"
+        )
+
+        result = self.report(
+            provider_attribution=True,
+            session_state=self.session_state,
+            data_db=self.data_db,
+        )
+
+        self.assertEqual(result["groups"][0]["provider"], "unknown")
+
+    def test_model_switch_during_request_is_unknown(self):
+        self.add_usage(
+            session_id="mid-request-switch",
+            created_at="2026-09-01T00:30:00Z",
+            duration_ms=600_000,
+            total_nano_aiu=0,
+        )
+        event_dir = self.session_state / "mid-request-switch"
+        event_dir.mkdir(parents=True)
+        events = [
+            {
+                "type": "session.start",
+                "timestamp": "2026-09-01T00:00:00Z",
+                "data": {"selectedModel": "provider-synthetic/synthetic-opus"},
+            },
+            {
+                "type": "session.model_change",
+                "timestamp": "2026-09-01T00:25:00Z",
+                "data": {"newModel": "provider-other/synthetic-opus"},
+            },
+        ]
+        (event_dir / "events.jsonl").write_text(
+            "\n".join(json.dumps(event) for event in events), encoding="utf-8"
+        )
+
+        result = self.report(
+            provider_attribution=True,
+            session_state=self.session_state,
+            data_db=self.data_db,
+        )
+
+        self.assertEqual(result["groups"][0]["provider"], "unknown")
+
+    def test_malformed_model_metadata_is_unknown_without_crashing(self):
+        self.add_usage(
+            session_id="malformed-metadata",
+            created_at="2026-09-01T00:30:00Z",
+            total_nano_aiu=0,
+        )
+        event_dir = self.session_state / "malformed-metadata"
+        event_dir.mkdir(parents=True)
+        (event_dir / "events.jsonl").write_text(
+            '\n'.join(
+                [
+                    '{"type":"user.message","data":{"content":"' + ('x' * 10000) + '"}}',
+                    '{"type":"session.start","timestamp":"2026-09-01T00:00:00Z","data":{"selectedModel":"provider-synthetic/synthetic-opus"}}',
+                    '{"type":"session.model_change","timestamp":"2026-09-01T00:20:00Z","data":',
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        result = self.report(
+            provider_attribution=True,
+            session_state=self.session_state,
+            data_db=self.data_db,
+        )
+
+        self.assertEqual(result["groups"][0]["provider"], "unknown")
 
     def test_session_id_cannot_escape_session_state(self):
         outside = self.root / "events.jsonl"
