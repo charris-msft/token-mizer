@@ -10,7 +10,7 @@ Token Mizer is an opt-in GitHub Copilot plugin that routes work across your conf
 - **Terra is not used.**
 - Paid fallback fails closed unless a valid local policy, authoritative usage data, and bounded spending controls are available.
 - Authentication failures stop with recovery guidance. Only explicit throttling evidence triggers bounded retry behavior.
-- An optional reporting skill analyzes Token Mizer session logs to compare routing outcomes over time.
+- The reporting skill automatically handles token-rate, TPM, tokens-per-second, model-throughput, usage, provider-comparison, and routing-effectiveness questions while Token Mizer is selected.
 
 The bundled skills activate automatically only after you select **Token Mizer** or explicitly ask to activate it. Installing or enabling the plugin does not apply routing globally.
 
@@ -89,9 +89,38 @@ Token Mizer separates authentication and configuration failures from throttling:
 - Retries respect `Retry-After` and are bounded to three attempts and five minutes of cumulative waiting. The coordinator yields while waiting instead of polling or competing for the same capacity.
 - After the bound, Token Mizer reports the blocker and waits for an explicit or genuinely scheduled resume. Five minutes makes paid fallback eligible for evaluation, never automatically authorized.
 
-## Effectiveness report
+## Usage and throughput reports
 
-Ask Token Mizer to run `token-mizer-report` for a dashboard or periodic report. Where the host exposes session history, the skill analyzes Token Mizer sessions using recorded model usage, tool outcomes, durations, retries, and error classes. It compares task categories and routes without treating generic cost multipliers as dollars or claiming causation from small samples. If structured session history is unavailable, it reports the limitation rather than inventing metrics.
+While Token Mizer is selected, requests about token rates, TPM, tokens per second, model speed, usage, provider comparisons, or routing effectiveness automatically load `token-mizer-report`. Reporting remains opt-in through the selected agent and does not enable routing globally.
+
+The skill starts with the local `assistant_usage_events` table instead of searching conversation summaries or response text. For repeatable exact-cutoff reports, use the bundled dependency-free helper:
+
+```powershell
+python scripts\token_mizer_report.py `
+  --start 2026-09-01T00:00:00Z `
+  --end 2026-09-08T00:00:00Z `
+  --model-like "%opus%"
+```
+
+`--start` is inclusive and `--end` is exclusive. ISO timestamps with offsets are normalized to UTC; timezone-free SQLite timestamps are treated as UTC. The default database is `$COPILOT_HOME\session-store.db`, or `~/.copilot/session-store.db` when `COPILOT_HOME` is unset. Use `--format json` for structured output.
+
+The default cohort is qualifying productive main-agent API records: `agent_id IS NULL`, non-null API endpoint, positive output tokens, and positive duration. Reports always distinguish:
+
+- **Mean per-call output TPM:** average of each call's `60000 × output_tokens ÷ duration_ms`.
+- **Pooled overall output TPM:** `60000 × total output tokens ÷ total duration`.
+
+These values measure observed output throughput over recorded request duration. They are not configured TPM quota, total prompt-token processing, or pure streaming decode speed. Reports include calls, sessions, window, source, and exclusions. They do not infer billing from multipliers or claim controlled provider causality across different workloads.
+
+Provider attribution is off by default. Add `--provider-attribution metadata` only when needed. It reads model-selection metadata for the SQL-selected session IDs, resolves provider names from read-only `data.db`, and labels missing evidence `unknown`. It never treats an API endpoint as provider proof or scans all histories recursively.
+
+The helper opens SQLite in read-only URI mode, introspects required columns, uses parameterized SQL, and performs no uploads, installs, database writes, policy writes, or LLM calls. Missing databases or fields produce an honest `UNAVAILABLE` result.
+
+Synthetic output example:
+
+```text
+Model | Provider | Calls | Sessions | Mean per-call output TPM | Pooled overall output TPM
+synthetic-opus | not requested | 12 | 4 | 3600.0 | 4100.0
+```
 
 ## If Token Mizer is missing from the agent picker
 
@@ -129,12 +158,14 @@ If multiple Token Mizer entries exist, uninstall stale direct or old-marketplace
 plugin.json                          Agent Plugins 1.0 manifest
 com.github.copilot/agents/           Copilot-specific agent profile
 skills/                              Portable routing, handoff, budget, and reporting skills
+scripts/token_mizer_report.py         Read-only usage and throughput helper
+tests/test_token_mizer_report.py      Synthetic fixture tests
 examples/policy.example.json         Safe, zero-budget local policy template
 ```
 
 ## Privacy and security
 
-This repository contains no personal budget amounts, local user paths, provider connection GUIDs, hooks, external telemetry collection, external services, or automatic updater. Private policy and provider configuration remain local; the report skill reads host-retained session evidence in place.
+This repository contains no personal budget amounts, session-derived private metrics, local user paths, provider connection GUIDs, hooks, external telemetry collection, external services, or automatic updater. Private policy and provider configuration remain local; the report helper reads host-retained session evidence in place and opens databases read-only.
 
 ## License
 
