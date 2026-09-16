@@ -1,8 +1,8 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "token-mizer",
-  "version": "1.2.1",
-  "description": "Opt-in, Foundry-first model routing that balances quality, latency, and token usage.",
+  "version": "1.3.0",
+  "description": "Opt-in, budget-aware Astra orchestration with authorized Gemini builders and Foundry fallback.",
   "author": {
     "name": "Chris Harris"
   },

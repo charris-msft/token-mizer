@@ -89,14 +89,15 @@ Offer the default unclassified mode when provider comparison is unnecessary or h
 
 For an effectiveness report, supplement throughput with time-bounded structured session and tool evidence. Keep policy eligibility separate from observed behavior and report:
 
-- tasks and route distribution across Sol, Luna, Astra, and explicitly approved GitHub fallback;
+- tasks and route distribution across Astra coordination, proactive Gemini 3.8 Flash builders, Foundry Sol fallback, Luna bounded non-build work, and separate capacity fallback;
 - completion and failure proxies, separating authentication/environment, throttling/capacity, tool, test, and reasoning failures;
 - median and p90 duration when timestamps are reliable;
 - input, output, cache, retry, and duplicate-worker evidence when available;
-- paid-route eligibility, approval, and actual paid use as three distinct states;
+- paid-route eligibility, approval, attempted model, accepted runtime ID, and actual observed use as distinct states;
+- proactive Gemini assignments versus five-minute-threshold capacity fallback as separate route reasons;
 - first-fix success and post-failure Astra escalation when evidence supports them.
 
-Authentication or unavailable-provider errors require login/environment recovery and are not quota evidence. For explicit 429, TPM, quota, or documented throttling, check bounded retries, `Retry-After`, one active worker per constrained connection, checkpoint reuse, and coordinator yielding. Do not infer success from the final assistant message, billing from multipliers, or causal routing improvements from small uncontrolled samples. If structured evidence or attribution is unavailable, name the missing capability and stop rather than reconstructing private prompts.
+Authentication or unavailable-provider errors require login/environment recovery and are not quota evidence. For explicit 429, TPM, quota, or documented throttling, check bounded retries, `Retry-After`, one active worker per constrained connection, checkpoint reuse, and coordinator yielding. Do not claim Gemini is faster, cheaper, or better from preference or an uncontrolled workload. Do not infer success from the final assistant message, billing from multipliers, or causal routing improvements from small uncontrolled samples. If structured evidence or attribution is unavailable, name the missing capability and stop rather than reconstructing private prompts.
 
 ## Privacy and output
 

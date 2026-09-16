@@ -6,6 +6,9 @@
     "escalation_model": "gpt-6-astra",
     "bounded_task_model": "gpt-5.6-luna"
   },
+  "github_models": {
+    "bounded_builder_model": "gemini-3.8-flash"
+  },
   "github_budget": {
     "valid_from": "2026-01-01",
     "valid_through": "2026-01-31",
@@ -16,5 +19,5 @@
     "reserve_requires_explicit_approval": true,
     "user_reported_remaining_approximate": 0
   },
-  "notes": "Replace provider, dates, and amounts locally. Zero values keep paid fallback disabled. Never commit your real policy."
+  "notes": "The Gemini model is an optional paid builder preference, not a Foundry mapping. Replace provider, dates, and amounts locally. Zero values keep Gemini and every automatic paid route disabled. Never commit your real policy."
 }
