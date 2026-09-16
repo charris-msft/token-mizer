@@ -1,11 +1,20 @@
 {
-  "schemaVersion": 1,
-  "validFrom": "2026-01-01",
-  "validThrough": "2026-01-31",
-  "timeZone": "America/Los_Angeles",
-  "weekdayAllowanceUsd": 0,
-  "weekendAllowanceUsd": 0,
-  "perTaskAllowanceUsd": 0,
-  "approvalOnlyReserveUsd": 0,
-  "notes": "Replace dates and amounts locally. Zero values keep paid fallback disabled. Never commit your real policy."
+  "provider": {
+    "connection_id": "replace-with-your-foundry-connection-id",
+    "name": "Foundry",
+    "default_model": "gpt-5.6-sol",
+    "escalation_model": "gpt-6-astra",
+    "bounded_task_model": "gpt-5.6-luna"
+  },
+  "github_budget": {
+    "valid_from": "2026-01-01",
+    "valid_through": "2026-01-31",
+    "time_zone": "America/Los_Angeles",
+    "weekday_allowance": 0,
+    "weekend_automatic_allowance": 0,
+    "task_allowance": 0,
+    "reserve_requires_explicit_approval": true,
+    "user_reported_remaining_approximate": 0
+  },
+  "notes": "Replace provider, dates, and amounts locally. Zero values keep paid fallback disabled. Never commit your real policy."
 }
