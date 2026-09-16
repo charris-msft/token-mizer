@@ -1,14 +1,15 @@
 # Token Mizer
 
-Token Mizer is an opt-in GitHub Copilot plugin that routes work across your configured Foundry models while minimizing duplicated context, unnecessary calls, and unbounded paid fallback.
+Token Mizer is an opt-in GitHub Copilot plugin that uses a Foundry coordinator, policy-authorized Gemini builders, and Foundry fallbacks while minimizing duplicated context, unnecessary calls, and unbounded paid use.
 
 ## What it does
 
-- **Sol** is the default for routine implementation, research, writing, and coordination.
-- **Luna** handles small, bounded work with objective acceptance checks.
-- **Astra** handles difficult planning, high-risk decisions, and diagnosis after a failed first fix.
+- **Astra** is the recommended inherited coordinator for planning, hard decisions, compact delegation, verification, and diagnosis after a failed first fix.
+- **Gemini 3.8 Flash** is preferred for substantial bounded implementation and build tasks only when the local paid policy and enforceable spending safeguards authorize it.
+- **Sol** is the no-paid-budget or unavailable-Gemini fallback for routine implementation and coordination.
+- **Luna** remains available for small bounded non-build work with objective acceptance checks.
 - **Terra is not used.**
-- Paid fallback fails closed unless a valid local policy, authoritative usage data, and bounded spending controls are available.
+- Every paid route fails closed unless a valid nonzero local policy, authoritative usage data, and bounded spending controls are available.
 - Authentication failures stop with recovery guidance. Only explicit throttling evidence triggers bounded retry behavior.
 - The reporting skill automatically handles token-rate, TPM, tokens-per-second, model-throughput, usage, provider-comparison, and routing-effectiveness questions while Token Mizer is selected.
 
@@ -18,10 +19,12 @@ The bundled skills activate automatically only after you select **Token Mizer** 
 
 1. Install a current [GitHub Copilot CLI](https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/plugins-finding-installing) build with plugin support.
 2. Configure access to Foundry models in your Copilot host.
-3. Copy and complete the local policy example so Token Mizer can map your account-specific provider connection to Sol, Luna, and Astra.
-4. Select your configured Foundry Sol model as the coordinator before selecting Token Mizer.
+3. Copy and complete the local policy example so Token Mizer can map your account-specific provider connection to Sol, Luna, and Astra and can fail closed on paid builders.
+4. Select your provider-qualified Forge Foundry Astra model as the coordinator before selecting Token Mizer. Select Foundry Sol instead when you want the economy coordinator.
 
-The public agent profile is model-unpinned. It inherits the coordinator model selected by the host and cannot switch the current coordinator automatically. Selecting a Foundry coordinator during setup prevents accidental GitHub-billed coordinator use. Worker routes use either host catalog metadata or the user-confirmed local provider mapping, and must still be accepted by the runtime. Token Mizer never removes a provider prefix or silently substitutes a GitHub-billed model.
+The public agent profile is model-unpinned. It inherits the coordinator selected by the host and cannot switch the current coordinator automatically. Selecting provider-qualified Foundry Astra during setup prevents accidental GitHub-billed coordinator use while keeping difficult decisions on the orchestrator. Astra plans compact bounded tasks, assigns eligible builds to Gemini, and verifies the returned evidence. Worker routes use either host catalog metadata or the user-confirmed local provider mapping and must be accepted by the runtime. Token Mizer never removes a provider prefix or silently substitutes a paid model.
+
+`gemini-3.8-flash` is treated as GitHub-billed unless authoritative host metadata supplies a provider-qualified ID. Token Mizer preserves a qualified ID the host actually offers and never invents a Foundry Gemini connection. If Gemini is unavailable, not authorized, or cannot be bounded safely, the task stays on Foundry Sol.
 
 ## Install
 
@@ -75,9 +78,9 @@ Token Mizer never publishes or initializes your budget. To create a local policy
 - `$env:COPILOT_HOME\token-mizer\policy.json` when `COPILOT_HOME` is set
 - otherwise, your Copilot configuration directory under `token-mizer\policy.json`
 
-Set `provider.connection_id` to the Foundry connection ID confirmed for your account and keep the model names aligned with runtime-accepted IDs. Replace the example dates and zero amounts locally. Keep the real file out of source control. Zero values, missing files, invalid files, and expired dates disable automatic paid fallback while leaving correctly mapped Foundry routing available.
+Set `provider.connection_id` to the Foundry connection ID confirmed for your account and keep the model names aligned with runtime-accepted IDs. The optional `github_models.bounded_builder_model` selects the preferred paid builder; `gemini-3.8-flash` is the current default preference when the host exposes it. Existing policies without this optional object remain valid. Replace the example dates and zero amounts locally. Keep the real file out of source control. Zero values, missing files, invalid files, expired dates, and unavailable enforcement disable Gemini and every automatic paid route while leaving correctly mapped Foundry routing available.
 
-The policy is an allocation, not a live billing system. Token Mizer cannot meter billing, reserve funds, or impose a technical spending cap. Without authoritative usage and bounded-spend enforcement, it asks for a specific exception rather than spending automatically. If paid GitHub use is explicitly approved, Token Mizer prefers an available Fast variant when it can meet the task's quality requirements.
+The policy is an allocation, not a live billing system. Token Mizer cannot meter billing, reserve funds, or impose a technical spending cap. Without authoritative usage and bounded-spend enforcement, it remains on Foundry or asks for a specific exception rather than spending automatically. The Gemini preference authorizes proactive consideration for a suitable bounded build, not unmetered use and not an override of a zero-budget period.
 
 ## Provider failures and shared capacity
 
@@ -87,7 +90,8 @@ Token Mizer separates authentication and configuration failures from throttling:
 - Only explicit 429, TPM, quota, capacity, or documented throttling responses trigger retries.
 - Sol, Astra, and Luna on one Foundry connection may share capacity. Token Mizer limits a constrained connection to one active worker, reuses the existing session and checkpoints, and does not switch models as a presumed workaround.
 - Retries respect `Retry-After` and are bounded to three attempts and five minutes of cumulative waiting. The coordinator yields while waiting instead of polling or competing for the same capacity.
-- After the bound, Token Mizer reports the blocker and waits for an explicit or genuinely scheduled resume. Five minutes makes paid fallback eligible for evaluation, never automatically authorized.
+- After the bound, Token Mizer reports the blocker and waits for an explicit or genuinely scheduled resume. Five minutes makes capacity fallback eligible for evaluation, never automatically authorized.
+- Proactive Gemini builder selection is a separate route: a suitable bounded build can use it immediately when every paid gate passes. That does not remove the five-minute threshold from a separate capacity fallback.
 
 ## Usage and throughput reports
 
@@ -113,7 +117,7 @@ These per-call output rates are separate from deployment wall-clock TPM, which a
 
 Provider attribution is off by default. Add `--provider-attribution metadata` only when needed. It reads only model-selection metadata for the SQL-selected session IDs. Treating `created_at` as request completion, it requires the latest selection at request start to match the usage model and labels in-request changes, malformed metadata, or missing evidence `unknown`. It resolves provider names from read-only `data.db`, never treats an API endpoint as provider proof, and never scans all histories recursively.
 
-Routing-effectiveness reports retain the broader evidence checks: route distribution, outcome and failure classes, latency, retries, duplicate workers, paid-route eligibility versus approval versus observed use, first-fix success, and post-failure Astra escalation. Authentication/environment failures stay separate from throttling or quota evidence, and conclusions remain bounded by available structured evidence.
+Routing-effectiveness reports retain the broader evidence checks: Astra coordination, proactive Gemini builders, Sol fallback, Luna bounded work, separate capacity fallback, outcome and failure classes, latency, retries, duplicate workers, paid-route eligibility versus approval versus attempted route versus observed use, first-fix success, and post-failure Astra escalation. Authentication/environment failures stay separate from throttling or quota evidence. Reports do not claim Gemini is faster, cheaper, or better from preference or uncontrolled samples.
 
 The helper opens SQLite in read-only URI mode, introspects required columns, uses parameterized SQL, widens only its coarse date candidate range for timezone offsets, and then applies exact inclusive-start/exclusive-end UTC filtering. It performs no uploads, installs, database writes, policy writes, or LLM calls. Missing databases or fields produce an honest `UNAVAILABLE` result.
 
@@ -161,7 +165,8 @@ plugin.json                          Agent Plugins 1.0 manifest
 com.github.copilot/agents/           Copilot-specific agent profile
 skills/                              Portable routing, handoff, budget, and reporting skills
 scripts/token_mizer_report.py         Read-only usage and throughput helper
-tests/test_token_mizer_report.py      Synthetic fixture tests
+tests/test_token_mizer_report.py      Synthetic reporting fixture tests
+tests/test_routing_policy.py          Synthetic routing-policy invariants
 examples/policy.example.json         Safe, zero-budget local policy template
 ```
 
