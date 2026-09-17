@@ -102,8 +102,9 @@ The bounded-RUG mode is opt-in per task and does not change Token Mizer's defaul
 A practical successful CI-boundary run is:
 
 ```powershell
-$record = "$env:COPILOT_HOME\token-mizer\tasks\change-42.json"
-$registry = "$env:COPILOT_HOME\token-mizer\task-registry.json"
+$copilotHome = if ($env:COPILOT_HOME) { $env:COPILOT_HOME } else { Join-Path $HOME '.copilot' }
+$record = Join-Path $copilotHome 'token-mizer\tasks\change-42.json'
+$registry = Join-Path $copilotHome 'token-mizer\task-registry.json'
 $revision = git rev-parse HEAD
 python scripts\bounded_rug.py --registry $registry init --file $record --task-id change-42 --label "Bounded change" --task-class code-change --acceptance-boundary ci-passed --mode bounded-rug --coordinator-session coordinator-session --revision $revision --environment windows --at 2026-09-17T10:00:00Z
 python scripts\bounded_rug.py --registry $registry transition --file $record --to build --result started --event-id build-1 --expected-sequence 0 --expected-record-revision 0 --at 2026-09-17T10:01:00Z

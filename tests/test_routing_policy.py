@@ -85,6 +85,16 @@ class RoutingPolicyTests(unittest.TestCase):
         self.assertIn("eligibility, approval, attempted model, accepted runtime ID, and actual observed use", report)
         self.assertIn("Do not claim Gemini is faster, cheaper, or better", report)
 
+    def test_documented_bounded_rug_paths_use_copilot_home_fallback(self):
+        readme = read(README)
+        self.assertIn(
+            "$copilotHome = if ($env:COPILOT_HOME) { $env:COPILOT_HOME } else { Join-Path $HOME '.copilot' }",
+            readme,
+        )
+        self.assertIn("$record = Join-Path $copilotHome 'token-mizer\\tasks\\change-42.json'", readme)
+        self.assertIn("$registry = Join-Path $copilotHome 'token-mizer\\task-registry.json'", readme)
+        self.assertNotIn('$record = "$env:COPILOT_HOME\\token-mizer', readme)
+
     def test_public_files_do_not_bind_personal_provider_guid(self):
         public_text = "\n".join(
             read(path)

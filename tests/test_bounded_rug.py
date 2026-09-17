@@ -261,9 +261,14 @@ class BoundedRugTests(unittest.TestCase):
         self.assertEqual(pilot["cost_coverage"], "partial-observed-subtotal")
         self.assertEqual(pilot["recorded_ai_credits"], 1.0)
         self.assertEqual(pilot["model_active_ms"], 3000.0)
+        self.assertEqual(task["duration_coverage"]["status"], "complete")
+        self.assertEqual(pilot["duration_coverage"]["status"], "complete")
         self.assertEqual(
             {role["role"]: role["calls"] for role in pilot["roles"]},
             {"builder": 1, "coordinator": 1},
+        )
+        self.assertTrue(
+            all(role["duration_coverage"]["status"] == "complete" for role in pilot["roles"])
         )
         self.assertEqual(pilot["repair_attempts"], 0)
         self.assertEqual(pilot["followup_matured_tasks"], 1)

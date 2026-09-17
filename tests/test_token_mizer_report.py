@@ -797,6 +797,75 @@ class TokenMizerReportTests(unittest.TestCase):
         self.assertTrue(all(item["tokens_per_accepted_task"] == 15 for item in strata))
         self.assertTrue(all(item["credits_per_accepted_task"] == 1.0 for item in strata))
 
+    def test_pilot_strata_require_complete_positive_duration_coverage_for_model_active_ratio(self):
+        self.add_usage(
+            session_id="unknown-duration", created_at="2026-09-01T00:05:00Z",
+            duration_ms=None, input_tokens=10, output_tokens=5,
+            total_nano_aiu=1_000_000_000,
+        )
+        self.add_usage(
+            session_id="partial-duration", created_at="2026-09-01T00:15:00Z",
+            duration_ms=1000, input_tokens=10, output_tokens=5,
+            total_nano_aiu=1_000_000_000,
+        )
+        self.add_usage(
+            session_id="partial-duration", created_at="2026-09-01T00:16:00Z",
+            duration_ms=None, input_tokens=10, output_tokens=5,
+            total_nano_aiu=1_000_000_000,
+        )
+        self.add_usage(
+            session_id="known-duration", created_at="2026-09-01T00:25:00Z",
+            duration_ms=2000, input_tokens=10, output_tokens=5,
+            total_nano_aiu=1_000_000_000,
+        )
+        ledger = self.root / "duration-strata.json"
+        tasks = [
+            ("unknown-duration", "unknown", "2026-09-01T00:00:00Z", "2026-09-01T00:10:00Z"),
+            ("partial-duration", "partial", "2026-09-01T00:10:00Z", "2026-09-01T00:20:00Z"),
+            ("known-duration", "complete", "2026-09-01T00:20:00Z", "2026-09-01T00:30:00Z"),
+        ]
+        ledger.write_text(json.dumps({
+            "schema_version": "1.0", "analysis_id": "duration-strata",
+            "cutoff": "2026-09-01T01:00:00Z",
+            "acceptance_boundaries": {"change": "ci-passed"},
+            "tasks": [
+                {
+                    "id": session, "label": session, "type": "change",
+                    "outcome": "ci-passed", "scope_complete": True,
+                    "pilot_mode": mode, "evidence": [],
+                    "scopes": [{"session_id": session, "start": start, "end": end}],
+                }
+                for session, mode, start, end in tasks
+            ],
+        }), encoding="utf-8")
+
+        strata = {
+            item["mode"]: item
+            for item in REPORT.build_task_report(self.db, ledger)["portfolio"]["pilot_strata"]
+        }
+
+        self.assertEqual(
+            strata["unknown"]["duration_coverage"],
+            {"known": 0, "unknown_or_invalid": 1, "total": 1, "status": "unknown"},
+        )
+        self.assertEqual(strata["unknown"]["model_active_ms_all_attempts"], 0)
+        self.assertIsNone(strata["unknown"]["model_active_ms_per_accepted_task"])
+        self.assertIn("duration coverage", strata["unknown"]["model_active_ratio_unavailable_reason"])
+        self.assertEqual(
+            strata["partial"]["duration_coverage"],
+            {"known": 1, "unknown_or_invalid": 1, "total": 2, "status": "partial-observed-subtotal"},
+        )
+        self.assertEqual(strata["partial"]["model_active_ms_all_attempts"], 1000)
+        self.assertIsNone(strata["partial"]["model_active_ms_per_accepted_task"])
+        self.assertEqual(strata["partial"]["tokens_per_accepted_task"], 30)
+        self.assertEqual(strata["partial"]["credits_per_accepted_task"], 2.0)
+        self.assertEqual(
+            strata["complete"]["duration_coverage"],
+            {"known": 1, "unknown_or_invalid": 0, "total": 1, "status": "complete"},
+        )
+        self.assertEqual(strata["complete"]["model_active_ms_per_accepted_task"], 2000)
+        self.assertIsNone(strata["complete"]["model_active_ratio_unavailable_reason"])
+
     def test_task_scope_normalizes_offsets_and_excludes_exact_end(self):
         self.add_usage(session_id="offset", created_at="2026-09-01T00:30:00Z")
         self.add_usage(session_id="offset", created_at="2026-09-01T01:00:00Z", duration_ms=2000)

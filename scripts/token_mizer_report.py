@@ -12,7 +12,7 @@ from collections import Counter, defaultdict
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from fractions import Fraction
-from math import ceil
+from math import ceil, isfinite
 from pathlib import Path
 from statistics import mean, median
 from typing import Any, Iterable
@@ -429,10 +429,33 @@ def reconcile_token_details(
     )
 
 
-def cost_status(records: list[dict[str, Any]], known_count: int) -> str:
-    if not records or known_count == 0:
+def coverage_status(total_count: int, known_count: int) -> str:
+    if total_count == 0 or known_count == 0:
         return "unknown"
-    return "complete" if known_count == len(records) else "partial-observed-subtotal"
+    return "complete" if known_count == total_count else "partial-observed-subtotal"
+
+
+def cost_status(records: list[dict[str, Any]], known_count: int) -> str:
+    return coverage_status(len(records), known_count)
+
+
+def valid_duration_ms(value: Any) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and isfinite(float(value))
+        and value > 0
+    )
+
+
+def duration_coverage(records: list[dict[str, Any]]) -> dict[str, int | str]:
+    known = sum(valid_duration_ms(row.get("duration_ms")) for row in records)
+    return {
+        "known": known,
+        "unknown_or_invalid": len(records) - known,
+        "total": len(records),
+        "status": coverage_status(len(records), known),
+    }
 
 
 def cost_summary(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
@@ -701,12 +724,12 @@ def summarize_task(task: dict[str, Any], rows: list[dict[str, Any]]) -> dict[str
     durations = [
         float(row["duration_ms"])
         for row in leaf_rows
-        if isinstance(row.get("duration_ms"), (int, float)) and row["duration_ms"] > 0
+        if valid_duration_ms(row.get("duration_ms"))
     ]
     intervals: list[tuple[datetime, datetime]] = []
     for row, scope in matched:
         duration = row.get("duration_ms")
-        if not isinstance(duration, (int, float)) or duration <= 0:
+        if not valid_duration_ms(duration):
             continue
         request_end = row["created_at"]
         request_start = request_end - timedelta(milliseconds=float(duration))
@@ -740,8 +763,9 @@ def summarize_task(task: dict[str, Any], rows: list[dict[str, Any]]) -> dict[str
                 "inference_resource_ms": sum(
                     float(row["duration_ms"])
                     for row in model_rows
-                    if isinstance(row.get("duration_ms"), (int, float)) and row["duration_ms"] > 0
+                    if valid_duration_ms(row.get("duration_ms"))
                 ),
+                "duration_coverage": duration_coverage(model_rows),
                 "known_cost_records": len(known_costs),
                 "unknown_cost_records": len(model_rows) - len(known_costs),
                 "cost_coverage": cost_status(model_rows, len(known_costs)),
@@ -778,8 +802,9 @@ def summarize_task(task: dict[str, Any], rows: list[dict[str, Any]]) -> dict[str
                 "model_active_ms": sum(
                     float(row["duration_ms"])
                     for row in role_rows
-                    if isinstance(row.get("duration_ms"), (int, float)) and row["duration_ms"] > 0
+                    if valid_duration_ms(row.get("duration_ms"))
                 ),
+                "duration_coverage": duration_coverage(role_rows),
                 "known_cost_records": len(role_costs),
                 "unknown_cost_records": len(role_rows) - len(role_costs),
                 "cost_coverage": cost_status(role_rows, len(role_costs)),
@@ -837,6 +862,7 @@ def summarize_task(task: dict[str, Any], rows: list[dict[str, Any]]) -> dict[str
             "output": "unknown" if not output_tokens else ("complete" if len(output_tokens) == len(leaf_rows) else "partial"),
         },
         "inference_resource_ms": sum(durations),
+        "duration_coverage": duration_coverage(leaf_rows),
         "request_active_wall_ms": union_duration_ms(intervals),
         "request_duration_ms": {
             "median": median(durations) if durations else None,
@@ -973,6 +999,9 @@ def build_task_report(db_path: Path, ledger_path: Path) -> dict[str, Any]:
             if item["recorded_ai_credits"] is not None
         ]
         elapsed_ms = [item["annotation_window"]["elapsed_ms"] for item in members]
+        known_duration_records = sum(
+            item["duration_coverage"]["known"] for item in members
+        )
         matured_members = [item for item in members if item["followup_matured"]]
         reopened_members = [item["reopened"] for item in matured_members if isinstance(item["reopened"], bool)]
         rollback_members = [item["rolled_back"] for item in matured_members if isinstance(item["rolled_back"], bool)]
@@ -988,6 +1017,9 @@ def build_task_report(db_path: Path, ledger_path: Path) -> dict[str, Any]:
                 if role["role"] == role_name
             ]
             role_calls = sum(role["calls"] for role in role_members)
+            role_known_durations = sum(
+                role["duration_coverage"]["known"] for role in role_members
+            )
             role_known_costs = sum(role["known_cost_records"] for role in role_members)
             role_credits = [
                 role["recorded_ai_credits"]
@@ -1001,6 +1033,12 @@ def build_task_report(db_path: Path, ledger_path: Path) -> dict[str, Any]:
                     "input_tokens": sum(role["input_tokens"] for role in role_members),
                     "output_tokens": sum(role["output_tokens"] for role in role_members),
                     "model_active_ms": sum(role["model_active_ms"] for role in role_members),
+                    "duration_coverage": {
+                        "known": role_known_durations,
+                        "unknown_or_invalid": role_calls - role_known_durations,
+                        "total": role_calls,
+                        "status": coverage_status(role_calls, role_known_durations),
+                    },
                     "known_cost_records": role_known_costs,
                     "unknown_cost_records": role_calls - role_known_costs,
                     "cost_coverage": cost_status([{}] * role_calls, role_known_costs),
@@ -1047,6 +1085,12 @@ def build_task_report(db_path: Path, ledger_path: Path) -> dict[str, Any]:
                     "p90_nearest_rank": nearest_rank(elapsed_ms, 0.90),
                 },
                 "model_active_ms": sum(item["inference_resource_ms"] for item in members),
+                "duration_coverage": {
+                    "known": known_duration_records,
+                    "unknown_or_invalid": calls - known_duration_records,
+                    "total": calls,
+                    "status": coverage_status(calls, known_duration_records),
+                },
                 "request_active_wall_ms": sum(item["request_active_wall_ms"] for item in members),
                 "roles": roles,
                 "build_attempts": sum(
@@ -1085,10 +1129,14 @@ def build_task_report(db_path: Path, ledger_path: Path) -> dict[str, Any]:
         input_known = sum(item["input_token_records"] for item in applicable)
         output_known = sum(item["output_token_records"] for item in applicable)
         known_costs = sum(item["known_cost_records"] for item in applicable)
+        known_durations = sum(
+            item["duration_coverage"]["known"] for item in applicable
+        )
         scopes_complete = bool(applicable) and all(
             item["scope_complete"] and item["calls"] > 0 for item in applicable
         )
         token_coverage_complete = calls > 0 and input_known == calls and output_known == calls
+        duration_coverage_complete = calls > 0 and known_durations == calls
         cost_coverage_complete = calls > 0 and known_costs == calls
         tokens = sum(item["input_tokens"] + item["output_tokens"] for item in applicable)
         credits_values = [
@@ -1100,6 +1148,20 @@ def build_task_report(db_path: Path, ledger_path: Path) -> dict[str, Any]:
         elapsed_total = sum(item["annotation_window"]["elapsed_ms"] for item in applicable)
         active_total = sum(item["inference_resource_ms"] for item in applicable)
         ratios_available = accepted_count > 0 and scopes_complete
+        base_ratio_reason = (
+            None
+            if ratios_available
+            else "requires at least one accepted task and explicit complete nonempty scopes"
+        )
+        token_ratio_reason = base_ratio_reason or (
+            None if token_coverage_complete else "requires complete input and output token coverage"
+        )
+        model_active_ratio_reason = base_ratio_reason or (
+            None if duration_coverage_complete else "requires finite positive duration coverage for every owned call"
+        )
+        credit_ratio_reason = base_ratio_reason or (
+            None if cost_coverage_complete else "requires complete relevant cost coverage"
+        )
         matured_members = [item for item in applicable if item["followup_matured"]]
         pilot_strata.append(
             {
@@ -1125,6 +1187,12 @@ def build_task_report(db_path: Path, ledger_path: Path) -> dict[str, Any]:
                 "recorded_ai_credits_all_attempts": credits,
                 "annotated_elapsed_ms_all_attempts": elapsed_total,
                 "model_active_ms_all_attempts": active_total,
+                "duration_coverage": {
+                    "known": known_durations,
+                    "unknown_or_invalid": calls - known_durations,
+                    "total": calls,
+                    "status": coverage_status(calls, known_durations),
+                },
                 "build_attempts": sum((item.get("bounded_rug") or {}).get("build_attempts", 0) for item in applicable),
                 "repair_attempts": sum((item.get("bounded_rug") or {}).get("repair_attempts", 0) for item in applicable),
                 "verifications": sum((item.get("bounded_rug") or {}).get("verifications", 0) for item in applicable),
@@ -1132,16 +1200,23 @@ def build_task_report(db_path: Path, ledger_path: Path) -> dict[str, Any]:
                 "reopened_explicit_samples": sum(isinstance(item["reopened"], bool) for item in matured_members),
                 "reopened_tasks": sum(item["reopened"] is True for item in matured_members),
                 "tokens_per_accepted_task": tokens / accepted_count
-                if ratios_available and token_coverage_complete else None,
+                if token_ratio_reason is None else None,
+                "tokens_ratio_unavailable_reason": token_ratio_reason,
                 "elapsed_ms_per_accepted_task": elapsed_total / accepted_count
-                if ratios_available else None,
+                if base_ratio_reason is None else None,
+                "elapsed_ratio_unavailable_reason": base_ratio_reason,
                 "model_active_ms_per_accepted_task": active_total / accepted_count
-                if ratios_available else None,
+                if model_active_ratio_reason is None else None,
+                "model_active_ratio_unavailable_reason": model_active_ratio_reason,
                 "credits_per_accepted_task": credits / accepted_count
-                if ratios_available and cost_coverage_complete and credits is not None else None,
+                if credit_ratio_reason is None and credits is not None else None,
+                "credits_ratio_unavailable_reason": credit_ratio_reason,
                 "ratio_unavailable_reason": None
-                if ratios_available and token_coverage_complete and cost_coverage_complete
-                else "ratios require accepted tasks, explicit complete nonempty scopes, and complete relevant token/cost coverage",
+                if all(
+                    reason is None
+                    for reason in (token_ratio_reason, base_ratio_reason, model_active_ratio_reason, credit_ratio_reason)
+                )
+                else "see metric-specific unavailable reasons",
                 "comparison_notice": "Compare only the same task class and acceptance boundary; observational results do not establish causality or savings.",
             }
         )
@@ -1244,7 +1319,7 @@ def build_task_report(db_path: Path, ledger_path: Path) -> dict[str, Any]:
         },
         "definitions": {
             "task_elapsed": "User-annotated task start to end or cutoff; not inferred from session lifetime.",
-            "inference_resource_ms": "Sum of matching request durations, including concurrent workers; pilot-mode summaries label the same quantity model_active_ms.",
+            "inference_resource_ms": "Observed subtotal of finite positive matching request durations, including concurrent workers; pilot-mode summaries label the same quantity model_active_ms and expose duration coverage.",
             "request_active_wall_ms": "Union of matching request intervals; excludes unobserved human idle and CI/tool waiting.",
             "cost": "Recorded leaf-call nano-AIU only; endpoint-null aggregate rows are excluded, partial coverage is an observed subtotal, and all-unknown cost stays null.",
             "acceptance": "Each comparable task type requires an explicit acceptance boundary. Earlier successful states do not satisfy a stricter boundary, and evidence remains user-supplied annotation.",
