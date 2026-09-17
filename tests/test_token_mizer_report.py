@@ -452,6 +452,22 @@ class TokenMizerReportTests(unittest.TestCase):
             {"priced": 1, "incomplete_or_malformed": 1},
         )
 
+    def test_unpriced_siblings_in_pricing_list_prevent_reconciliation(self):
+        valid = {"tokenCount": 1, "costPerBatch": 1_000_000_000, "batchSize": 1}
+        for sibling in (None, {}, "metadata"):
+            with self.subTest(sibling=sibling):
+                costs, incomplete = REPORT.token_detail_costs([valid, sibling])
+                self.assertEqual(costs, [1_000_000_000])
+                self.assertEqual(incomplete, 1)
+                row = {
+                    "token_details_json": json.dumps([valid, sibling]),
+                    "total_nano_aiu": 1_000_000_000,
+                }
+                status, calculated, priced, malformed = REPORT.reconcile_token_details(row)
+                self.assertEqual(status, "partial")
+                self.assertEqual(calculated, 1_000_000_000)
+                self.assertEqual((priced, malformed), (1, 1))
+
     def test_task_ledger_preserves_mixed_models_and_unions_parallel_intervals(self):
         self.add_usage(session_id="coordinator", model="synthetic-astra", created_at="2026-09-01T00:00:10Z", duration_ms=10000, input_tokens=100, output_tokens=10, total_nano_aiu=1_000_000_000)
         self.add_usage(session_id="builder", model="synthetic-gemini", created_at="2026-09-01T00:00:10Z", duration_ms=10000, agent_id="worker", input_tokens=200, output_tokens=20, total_nano_aiu=2_000_000_000)
@@ -624,15 +640,50 @@ class TokenMizerReportTests(unittest.TestCase):
         live_type = live_report["portfolio"]["task_types"][0]
 
         self.assertEqual(live_type["accepted_tasks"], 1)
-        self.assertEqual(live_type["boundary_not_reached_tasks"], 1)
+        self.assertEqual(live_type["acceptance_unknown_tasks"], 1)
+        self.assertEqual(live_type["boundary_not_reached_tasks"], 0)
         self.assertEqual(live_type["credits_per_accepted_task"], 2.0)
         self.assertIn("not independently verified", live_report["tasks"][1]["evidence_status"])
 
         ledger["acceptance_boundaries"]["deployment"] = "deployed"
         ledger_path.write_text(json.dumps(ledger), encoding="utf-8")
         deployed_type = REPORT.build_task_report(self.db, ledger_path)["portfolio"]["task_types"][0]
-        self.assertEqual(deployed_type["accepted_tasks"], 2)
-        self.assertEqual(deployed_type["credits_per_accepted_task"], 1.0)
+        self.assertEqual(deployed_type["accepted_tasks"], 1)
+        self.assertEqual(deployed_type["acceptance_unknown_tasks"], 1)
+        self.assertEqual(deployed_type["credits_per_accepted_task"], 2.0)
+
+        ledger["tasks"][1]["observed_milestones"] = ["deployed"]
+        ledger_path.write_text(json.dumps(ledger), encoding="utf-8")
+        explicit_deployed = REPORT.build_task_report(self.db, ledger_path)["portfolio"]["task_types"][0]
+        self.assertEqual(explicit_deployed["accepted_tasks"], 2)
+        self.assertEqual(explicit_deployed["acceptance_unknown_tasks"], 0)
+        self.assertEqual(explicit_deployed["credits_per_accepted_task"], 1.0)
+
+    def test_merged_does_not_imply_ci_without_explicit_observed_milestone(self):
+        self.add_usage(session_id="merged", total_nano_aiu=1_000_000_000)
+        ledger_path = self.root / "merged-no-ci.json"
+        ledger = {
+            "schema_version": "1.0", "analysis_id": "merged-no-ci", "cutoff": "2026-09-02T00:00:00Z",
+            "acceptance_boundaries": {"change": "ci-passed"},
+            "tasks": [{
+                "id": "merged", "label": "Merged without CI evidence", "type": "change", "outcome": "merged", "scope_complete": True,
+                "evidence": [], "scopes": [{"session_id": "merged", "start": "2026-09-01T00:00:00Z", "end": "2026-09-02T00:00:00Z"}],
+            }],
+        }
+        ledger_path.write_text(json.dumps(ledger), encoding="utf-8")
+
+        unknown = REPORT.build_task_report(self.db, ledger_path)["portfolio"]["task_types"][0]
+
+        self.assertEqual(unknown["accepted_tasks"], 0)
+        self.assertEqual(unknown["acceptance_unknown_tasks"], 1)
+        self.assertIsNone(unknown["credits_per_accepted_task"])
+
+        ledger["tasks"][0]["observed_milestones"] = ["ci-passed"]
+        ledger_path.write_text(json.dumps(ledger), encoding="utf-8")
+        explicit = REPORT.build_task_report(self.db, ledger_path)["portfolio"]["task_types"][0]
+        self.assertEqual(explicit["accepted_tasks"], 1)
+        self.assertEqual(explicit["acceptance_unknown_tasks"], 0)
+        self.assertEqual(explicit["credits_per_accepted_task"], 1.0)
 
     def test_task_scope_must_be_contained_in_task_window(self):
         ledger = {

@@ -54,10 +54,10 @@ TASK_OUTCOMES = {
     "unfinished",
 }
 ACCEPTANCE_BOUNDARIES = {
-    "ci-passed": {"ci-passed", "merged", "deployed", "deployed-and-live-verified"},
-    "merged": {"merged", "deployed", "deployed-and-live-verified"},
-    "deployed": {"deployed", "deployed-and-live-verified"},
-    "deployed-and-live-verified": {"deployed-and-live-verified"},
+    "ci-passed",
+    "merged",
+    "deployed",
+    "deployed-and-live-verified",
 }
 
 
@@ -356,10 +356,13 @@ def token_detail_costs(value: Any) -> tuple[list[Fraction], int]:
     costs: list[Fraction] = []
     incomplete_entries = 0
     if isinstance(value, list):
-        for item in value:
-            item_costs, item_incomplete = token_detail_costs(item)
+        results = [token_detail_costs(item) for item in value]
+        pricing_list = any(item_costs or item_incomplete for item_costs, item_incomplete in results)
+        for item_costs, item_incomplete in results:
             costs.extend(item_costs)
             incomplete_entries += item_incomplete
+            if pricing_list and not item_costs and item_incomplete == 0:
+                incomplete_entries += 1
         return costs, incomplete_entries
     if not isinstance(value, dict):
         return costs, incomplete_entries
@@ -526,6 +529,17 @@ def normalize_task_ledger(ledger: dict[str, Any]) -> list[dict[str, Any]]:
         outcome = raw.get("outcome")
         if outcome not in TASK_OUTCOMES:
             raise ReportUnavailable(f"task {task_id} has unsupported outcome: {outcome}")
+        observed_milestones = raw.get("observed_milestones", [])
+        if (
+            not isinstance(observed_milestones, list)
+            or any(item not in ACCEPTANCE_BOUNDARIES for item in observed_milestones)
+            or len(set(observed_milestones)) != len(observed_milestones)
+        ):
+            raise ReportUnavailable(
+                f"task {task_id} observed_milestones must be a unique array of supported acceptance boundaries"
+            )
+        if outcome in ACCEPTANCE_BOUNDARIES and outcome not in observed_milestones:
+            observed_milestones = [*observed_milestones, outcome]
         scopes = raw.get("scopes")
         if not isinstance(scopes, list) or not scopes:
             raise ReportUnavailable(f"task {task_id} requires at least one ownership scope")
@@ -580,6 +594,7 @@ def normalize_task_ledger(ledger: dict[str, Any]) -> list[dict[str, Any]]:
                 **raw,
                 "id": task_id,
                 "outcome": outcome,
+                "observed_milestones": observed_milestones,
                 "start": task_start,
                 "end": task_end,
                 "scopes": normalized_scopes,
@@ -698,6 +713,7 @@ def summarize_task(task: dict[str, Any], rows: list[dict[str, Any]]) -> dict[str
         "label": task.get("label", task["id"]),
         "type": task.get("type", "unspecified"),
         "outcome": task["outcome"],
+        "observed_milestones": task["observed_milestones"],
         "scope_complete": task["scope_complete"],
         "acceptance_applicable": task["acceptance_applicable"],
         "annotation_window": {
@@ -765,13 +781,11 @@ def build_task_report(db_path: Path, ledger_path: Path) -> dict[str, Any]:
         members = [item for item in summaries if item["type"] == task_type]
         applicable = [item for item in members if item["acceptance_applicable"]]
         boundary = acceptance_boundaries.get(task_type)
-        accepted_outcomes = ACCEPTANCE_BOUNDARIES.get(boundary, set())
-        member_accepted = sum(item["outcome"] in accepted_outcomes for item in applicable)
-        boundary_not_reached = sum(
-            item["outcome"] in ACCEPTANCE_BOUNDARIES["ci-passed"]
-            and item["outcome"] not in accepted_outcomes
+        member_accepted = sum(
+            boundary is not None and boundary in item["observed_milestones"]
             for item in applicable
-        ) if boundary else 0
+        )
+        acceptance_unknown = len(applicable) - member_accepted
         member_complete = all(
             item["scope_complete"] and item["calls"] > 0 for item in applicable
         )
@@ -810,11 +824,11 @@ def build_task_report(db_path: Path, ledger_path: Path) -> dict[str, Any]:
                 "attempted_tasks": len(applicable),
                 "not_applicable_tasks": len(members) - len(applicable),
                 "accepted_tasks": member_accepted,
-                "boundary_not_reached_tasks": boundary_not_reached,
+                "boundary_not_reached_tasks": 0,
                 "failed_tasks": sum(item["outcome"] == "failed" for item in applicable),
                 "blocked_tasks": sum(item["outcome"] == "blocked" for item in applicable),
                 "unfinished_tasks": sum(item["outcome"] == "unfinished" for item in applicable),
-                "acceptance_unknown_tasks": len(applicable) if boundary is None else 0,
+                "acceptance_unknown_tasks": acceptance_unknown,
                 "elapsed_ms_median": median(member_elapsed),
                 "elapsed_ms_p90_nearest_rank": nearest_rank(member_elapsed, 0.90),
                 "recorded_ai_credits_all_applicable_attempts": member_credits,

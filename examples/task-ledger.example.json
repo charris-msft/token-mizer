@@ -13,6 +13,12 @@
       "start": "2026-01-07T10:00:00Z",
       "end": "2026-01-07T10:30:00Z",
       "outcome": "deployed-and-live-verified",
+      "observed_milestones": [
+        "ci-passed",
+        "merged",
+        "deployed",
+        "deployed-and-live-verified"
+      ],
       "scope_complete": true,
       "first_pass_gates": true,
       "followup_matured": true,
