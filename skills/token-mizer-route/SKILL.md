@@ -31,7 +31,7 @@ No Terra route is configured. Preserve a provider-qualified ID that the host act
 2. Prefer a provider-qualified Astra coordinator selected by the user before Token Mizer. Keep Astra planning and narration compact, avoid repeated reads, and retain hard or high-risk decisions.
 3. For substantial bounded implementation or build work, immediately evaluate proactive Gemini eligibility under `token-mizer-budget`. The five-minute capacity threshold does not apply to this proactive route.
 4. If Gemini is unavailable, not authorized, or cannot be safely bounded, use `provider.default_model` as the Foundry Sol fallback. Use `provider.bounded_task_model` only for suitable bounded non-build work.
-5. After a failed first fix, use `provider.escalation_model` for a bounded rubber-duck diagnosis with the reproduction, evidence, and unresolved question.
+5. After a failed first implementation or fix, use `provider.escalation_model` for a bounded rubber-duck diagnosis with the reproduction, evidence, and unresolved question. In the bounded-RUG pilot, that diagnosis may authorize the single repair attempt; a second failed verification blocks further automatic implementation.
 6. Delegate self-contained work using `token-mizer-handoff`. Prefer one worker and parallelize only independent work with measurable benefit.
 
 ## Policy-gated paid routes
@@ -58,4 +58,4 @@ If blocked beyond the retry bound, report the evidence and request or await an e
 
 ## Quality
 
-Reproduce reported bugs through the closest feasible user flow before editing. Verify changed behavior and relevant regression checks. Before accepting delegated code, require the same applicable repository-wide gates CI runs, including affected-package coverage for shared changes. Edited-file tests alone are insufficient evidence. Do not add unrelated reviewer agents or demand unrelated full suites. Research claims need sources. Report outcomes, verification, and remaining uncertainty concisely.
+Reproduce reported bugs through the closest feasible user flow before editing. Verify changed behavior and relevant regression checks. Before accepting delegated code, require the same applicable repository-wide gates CI runs, including affected-package coverage for shared changes. Edited-file tests alone are insufficient evidence. Run deterministic gates first. Add independent review only for substantial, risky, or previously failed work, never universally per file and never when Forge or another validator already provides equivalent evidence. Research claims need sources. Report outcomes, verification, and remaining uncertainty concisely.

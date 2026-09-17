@@ -1,8 +1,8 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "token-mizer",
-  "version": "1.4.0",
-  "description": "Opt-in, budget-aware Astra orchestration with authorized Gemini builders and Foundry fallback.",
+  "version": "1.5.0",
+  "description": "Opt-in, budget-aware Astra orchestration with bounded verification, authorized Gemini builders, and Foundry fallback.",
   "author": {
     "name": "Chris Harris"
   },

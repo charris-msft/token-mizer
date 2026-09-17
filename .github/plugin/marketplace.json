@@ -5,13 +5,13 @@
   },
   "metadata": {
     "description": "Official marketplace for the Token Mizer Copilot plugin",
-    "version": "1.4.0"
+    "version": "1.5.0"
   },
   "plugins": [
     {
       "name": "token-mizer",
-      "description": "Opt-in, budget-aware Astra orchestration with authorized Gemini builders and Foundry fallback",
-      "version": "1.4.0",
+      "description": "Opt-in, budget-aware Astra orchestration with bounded verification, authorized Gemini builders, and Foundry fallback",
+      "version": "1.5.0",
       "source": "."
     }
   ]

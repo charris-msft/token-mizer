@@ -93,6 +93,31 @@ Token Mizer separates authentication and configuration failures from throttling:
 - After the bound, Token Mizer reports the blocker and waits for an explicit or genuinely scheduled resume. Five minutes makes capacity fallback eligible for evaluation, never automatically authorized.
 - Proactive Gemini builder selection is a separate route: a suitable bounded build can use it immediately when every paid gate passes. That does not remove the five-minute threshold from a separate capacity fallback.
 
+## Optional bounded-RUG pilot
+
+The bounded-RUG mode is opt-in per task and does not change Token Mizer's default workflow. It keeps work requiring five or fewer direct calls in the coordinator. A larger coherent task may use one constrained worker, followed by deterministic verification. One failed verification permits one Astra-diagnosed repair; a second failure blocks automatic implementation and preserves the checkpoint. Budget, authorization, provider, authentication, and environment blockers stop earlier without consuming the code-repair attempt.
+
+`scripts\bounded_rug.py` stores a versioned private task record atomically and enforces the `task → build → verify → repair → verify → accepted|blocked` bounds. A private registry under `$COPILOT_HOME\token-mizer\task-registry.json` binds each task ID to one canonical record path, with `~\.copilot` as the fallback when `COPILOT_HOME` is unset. Registry-first file locking makes revision checks atomic across resumptions. Use the global `--registry` option to select another private registry for isolated automation or tests. It rejects stale record revisions, replayed events, counter resets, duplicate task identities, invalid transitions, and acceptance without evidence bound to the exact verified revision and environment. Scope completeness is a separate durable attestation that defaults to `unknown`; terminal state never makes it complete. The helper validates annotation structure, not whether an evidence reference is true. Keep records and registry files outside the repository and never put credentials, policy values, prompts, or full logs in them.
+
+A practical successful CI-boundary run is:
+
+```powershell
+$copilotHome = if ($env:COPILOT_HOME) { $env:COPILOT_HOME } else { Join-Path $HOME '.copilot' }
+$record = Join-Path $copilotHome 'token-mizer\tasks\change-42.json'
+$registry = Join-Path $copilotHome 'token-mizer\task-registry.json'
+$revision = git rev-parse HEAD
+python scripts\bounded_rug.py --registry $registry init --file $record --task-id change-42 --label "Bounded change" --task-class code-change --acceptance-boundary ci-passed --mode bounded-rug --coordinator-session coordinator-session --revision $revision --environment windows --at 2026-09-17T10:00:00Z
+python scripts\bounded_rug.py --registry $registry transition --file $record --to build --result started --event-id build-1 --expected-sequence 0 --expected-record-revision 0 --at 2026-09-17T10:01:00Z
+$verifiedRevision = git rev-parse HEAD
+python scripts\bounded_rug.py --registry $registry transition --file $record --to verify --result completed --event-id verify-1 --expected-sequence 1 --expected-record-revision 1 --target-revision $verifiedRevision --target-environment windows --at 2026-09-17T10:02:00Z
+python scripts\bounded_rug.py --registry $registry transition --file $record --to accepted --result passed --event-id accept-1 --expected-sequence 2 --expected-record-revision 2 --check "python -m unittest discover -s tests -v" --evidence "ci:run-123" --milestone ci-passed --target-revision $verifiedRevision --target-environment windows --at 2026-09-17T10:03:00Z
+python scripts\bounded_rug.py --registry $registry attest-scope --file $record --status complete --expected-record-revision 3 --at 2026-09-17T10:04:00Z
+python scripts\bounded_rug.py --registry $registry export-ledger --file $record --output "$env:TEMP\bounded-rug-ledger.json" --analysis-id bounded-rug-pilot --cutoff 2026-09-17T11:00:00Z
+python scripts\token_mizer_report.py --start 2026-09-17T10:00:00Z --end 2026-09-17T11:00:00Z --model-like "%" --task-ledger "$env:TEMP\bounded-rug-ledger.json" --format json
+```
+
+Use `add-scope` and `observe-model` to record every coordinator, builder, reviewer, and validator scope plus provider/model observations. Use literal `unknown` values instead of inference. Run `attest-scope --status complete` only after confirming those scopes cover every participant and do not overlap; otherwise leave the default `unknown` or attest `partial`. Efficiency ratios remain suppressed without complete nonempty scope and metric coverage. After a terminal task has actually matured, `record-followup` can record observed reopen and rollback results; observations later than the report cutoff are excluded. Baseline tasks are observational entries in the existing v1.0 ledger, not executions through this bounded treatment helper. Pilot comparisons are separated by mode, task class, and acceptance boundary, count failed attempts, disclose cost and timing coverage, and avoid causal or savings claims. Synthetic runs demonstrate mechanics only; real-world pilot results are pending. Token Mizer never launches paid A/B benchmarks.
+
 ## Model and task efficiency reports
 
 While Token Mizer is selected, requests about token rates, latency, costs, task efficiency, model comparisons, provider comparisons, or routing effectiveness automatically load `token-mizer-report`. Reporting remains opt-in and does not enable routing globally.
@@ -162,8 +187,10 @@ If multiple Token Mizer entries exist, uninstall stale direct or old-marketplace
 .github/plugin/marketplace.json      Marketplace catalog
 plugin.json                          Agent Plugins 1.0 manifest
 com.github.copilot/agents/           Copilot-specific agent profile
-skills/                              Portable routing, handoff, budget, and reporting skills
+skills/                              Portable routing, bounded-RUG, handoff, budget, and reporting skills
+scripts/bounded_rug.py                Atomic bounded task-state and ledger-export helper
 scripts/token_mizer_report.py         Read-only usage and throughput helper
+tests/test_bounded_rug.py             Bounded transition, persistence, CLI, and reporting tests
 tests/test_token_mizer_report.py      Synthetic reporting fixture tests
 tests/test_routing_policy.py          Synthetic routing-policy invariants
 examples/policy.example.json         Safe, zero-budget local policy template
