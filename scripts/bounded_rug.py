@@ -412,6 +412,10 @@ def validate_record(record: Any) -> None:
         seen_assignments.add(assignment_id)
         for key in ("task_id", "task_class", "acceptance_boundary", "selection_reason", "selected_provider", "selected_model", "outcome"):
             require_text(assignment.get(key), f"assignment {key}")
+        if assignment["task_id"] != task["id"]:
+            raise RecordError("model assignment task id must match enclosing bounded-RUG task")
+        if assignment["task_class"] != task["class"] or assignment["acceptance_boundary"] != task["acceptance_boundary"]:
+            raise RecordError("model assignment boundary/class must match enclosing bounded-RUG task")
         if not isinstance(assignment.get("eligibility"), list):
             raise RecordError("assignment eligibility must be an array")
         if not isinstance(assignment.get("attempts"), int) or assignment["attempts"] < 0:
@@ -640,6 +644,10 @@ def add_assignment(
     if record["state"] in TERMINAL_STATES:
         raise RecordError("cannot add assignment to a terminal record")
     candidate = deepcopy(assignment)
+    if candidate.get("task_id") != record["task"]["id"]:
+        raise RecordError("model assignment task id must match enclosing bounded-RUG task")
+    if candidate.get("task_class") != record["task"]["class"] or candidate.get("acceptance_boundary") != record["task"]["acceptance_boundary"]:
+        raise RecordError("model assignment boundary/class must match enclosing bounded-RUG task")
     validate_record({**record, "model_assignments": record.get("model_assignments", []) + [candidate]})
     if any(item["assignment_id"] == candidate["assignment_id"] for item in record.get("model_assignments", [])):
         raise RecordError("assignment identity already recorded")

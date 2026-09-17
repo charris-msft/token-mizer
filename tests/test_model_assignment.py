@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -93,10 +94,39 @@ class ModelAssignmentTests(unittest.TestCase):
             actual_model=POLICY.FLASH_MODEL,
             attempts=1,
             reassignments=0,
+            evidence=["ci:run-1"],
         )
         self.assertEqual("blocked", observed["outcome"])
         self.assertEqual(POLICY.FLASH_MODEL, observed["actual_model"])
         self.assertEqual(selected["selected_model"], observed["selected_model"])
+        persisted = json.loads(self.state.read_text(encoding="utf-8"))
+        self.assertEqual(2, len(persisted["events"]))
+
+    def test_reuse_revalidates_current_admission_and_preserves_history(self):
+        self.choose("reuse-1")
+        with self.assertRaisesRegex(POLICY.AssignmentBlocked, "historical assignment preserved"):
+            self.choose("reuse-1", candidates=[dict(self.flash, authorized=False), self.luna])
+        persisted = json.loads(self.state.read_text(encoding="utf-8"))
+        self.assertIn("reuse-1", persisted["assignments"])
+        self.assertEqual("reuse-blocked", persisted["events"][-1]["type"])
+
+    def test_routes_are_validated_and_large_context_excludes_foundry(self):
+        spoofed = dict(self.luna, model=POLICY.FLASH_MODEL)
+        with self.assertRaises(POLICY.AssignmentBlocked):
+            self.choose("spoofed", candidates=[spoofed])
+        with self.assertRaises(POLICY.AssignmentBlocked):
+            self.choose("large-foundry", candidates=[self.luna], large_context=True)
+
+    def test_cli_help_and_json_contract(self):
+        import subprocess, sys
+        script = ROOT / "scripts" / "model_assignment.py"
+        help_result = subprocess.run([sys.executable, str(script), "--help"], capture_output=True, text=True, check=False)
+        self.assertEqual(0, help_result.returncode)
+        self.assertIn("select", help_result.stdout)
+        request = {"assignment_id": "cli-1", "task_id": "task-1", "task_class": "code-change", "acceptance_boundary": "ci-passed", "required_context": 50, "candidates": [self.luna]}
+        result = subprocess.run([sys.executable, str(script), "--state", str(self.state), "select"], input=json.dumps(request), capture_output=True, text=True, check=False)
+        self.assertEqual(0, result.returncode)
+        self.assertEqual("cli-1", json.loads(result.stdout)["assignment_id"])
 
 
 if __name__ == "__main__":
