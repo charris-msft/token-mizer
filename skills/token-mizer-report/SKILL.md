@@ -15,7 +15,7 @@ Start with structured usage records, not conversation summaries, raw assistant t
 2. Otherwise run the bundled dependency-free helper `scripts/token_mizer_report.py`. It opens `session-store.db` in SQLite read-only URI mode, introspects the schema, uses parameterized SQL, applies exact UTC cutoffs in Python, and reports honest `UNAVAILABLE` errors for missing data.
 3. Resolve the Copilot home from `COPILOT_HOME`, otherwise `~/.copilot`. Always require explicit inclusive start and exclusive end cutoffs.
 
-The known local source is `assistant_usage_events`. Required fields are `session_id`, `agent_id`, `model`, `output_tokens`, `duration_ms`, `total_nano_aiu`, `api_endpoint`, and `created_at`. The productive main-agent API cohort requires:
+The known local source is `assistant_usage_events`. Required fields are `session_id`, `agent_id`, `model`, `output_tokens`, `duration_ms`, `api_endpoint`, and `created_at`. Timing, reasoning, input, cache, and cost-ledger fields are optional; report their coverage and keep missing values unknown. The productive main-agent API cohort requires:
 
 - `agent_id IS NULL`;
 - `api_endpoint IS NOT NULL` because null endpoints can be aggregate records;
@@ -59,6 +59,9 @@ Label these as different averages:
 - **Mean per-call output TPM:** `AVG(60000 * output_tokens / duration_ms)` gives every qualifying request equal weight.
 - **Pooled overall output TPM:** `60000 * SUM(output_tokens) / SUM(duration_ms)` weights requests by their recorded duration.
 - **Output tokens/second:** divide TPM by 60; keep mean and pooled variants separate.
+- **Request duration:** mean, median, and nearest-rank p90 of recorded request duration. This is neither pure streaming decode time nor task completion time.
+- **Output size:** mean output tokens and fixed output-length strata. Compare similar strata, reasoning settings, dates, and workloads instead of attributing an uncontrolled difference to the model.
+- **Coverage:** calls, sessions, calls per session, observed bounds, exclusions, and optional timing/reasoning field coverage.
 
 Keep three different measurements separate:
 
@@ -66,9 +69,17 @@ Keep three different measurements separate:
 2. **Deployment wall-clock TPM:** aggregate input plus output tokens across all concurrent requests in each real one-minute interval. When explicitly requested and already authorized, Azure Monitor `TokenTransaction`, `ProcessedPromptTokens`, and `GeneratedTokens` with interval `PT1M` and a `ModelDeploymentName` filter can measure aggregate peaks without an LLM call.
 3. **Quota-enforcement estimates:** remaining-token or rate-limit headers and service enforcement state. Estimates can include output caps and differ from recorded or billed token counts.
 
-These are not interchangeable. Monitor aggregates do not prove the exact service-side throttle calculation. Report calls, distinct sessions, exact window, exclusions, and source. Reasoning effort, request size, dates, workload, and concurrency can differ, so do not claim controlled provider causality.
+These are not interchangeable. Monitor aggregates do not prove the exact service-side throttle calculation. Discover models from the bounded records rather than maintaining a hardcoded model list. Report calls, distinct sessions, exact window, exclusions, and source. For recent-versus-historical comparisons, run separately versioned windows with the same filters and disclose non-overlap. Reasoning effort, request size, dates, workload, and concurrency can differ, so do not claim controlled provider causality.
 
 Never calculate from assistant response length, sum cumulative session counters as if they were per-call records, infer currency from multipliers, count missing duration as zero, or mix main-agent requests with subagent or aggregate rollups.
+
+## Recorded cost accounting
+
+Keep the cost cohort separate from the positive-output throughput cohort. Include endpoint-present zero-output leaf calls, but never add endpoint-null aggregate records to leaf calls. `NULL total_nano_aiu` is unknown, not zero: all-unknown totals stay `null`, and partial coverage is an explicitly labeled observed subtotal. Do not multiply recorded cost by `request_multiplier`.
+
+Treat `1,000,000,000` nano-AIU as one recorded AI credit. GitHub documents one AI credit as a `$0.01 USD` equivalent. Label that value as a documented equivalent, not an invoice, charge, Foundry price, or budget-policy balance. `input_tokens` already includes cache-read and cache-write tokens; `output_tokens` already includes billed output represented by the record. Do not add cache or reasoning fields again.
+
+When `token_details_json` supplies token counts, batch sizes, and nano-AIU cost-per-batch metadata, reconcile its exact rational sum against `total_nano_aiu`. Report absent, malformed, incomplete, partial, unpriced, reconciled, and mismatched coverage. Any invalid sibling entry prevents a fully reconciled label. A missing or malformed ledger never becomes a guessed cost.
 
 Synthetic example:
 
@@ -76,6 +87,25 @@ Synthetic example:
 Model            Calls  Sessions  Mean per-call output TPM  Pooled overall output TPM
 synthetic-opus       12         4                    3600.0                     4100.0
 ```
+
+## Optional task ledger
+
+Use `--task-ledger examples\task-ledger.example.json --format json` for annotation-driven task accounting. The versioned JSON supplies explicit task IDs, labels/types, UTC task windows, outcomes, evidence references, scope-completeness flags, per-task-type `acceptance_boundaries`, and one or more session/time ownership scopes. Outcomes distinguish CI-passed, merged, deployed, deployed-and-live-verified, failed, blocked, and unfinished. Do not infer task boundaries from session lifetime or automatically certify evidence references.
+
+Require every ownership scope to fit inside its annotated task window. Reject overlaps both across tasks and within one task/session. Include coordinator and worker leaf calls within owned scopes, including zero-output calls, but exclude endpoint-null aggregates. Keep mixed-model work as a per-model team breakdown. Include failed, blocked, and unfinished applicable attempts in denominators and costs; use `acceptance_applicable: false` only for tasks genuinely outside that type's boundary.
+
+Report these quantities separately:
+
+- annotated task elapsed time from the supplied start/end or cutoff;
+- summed inference resource time, which counts parallel workers separately;
+- unioned request-active wall time, which merges overlapping request intervals;
+- p50 and p90 request duration;
+- recorded credits and documented USD equivalent with cost coverage;
+- first-pass gate rates only for explicit boolean samples; reopened and rollback rates only for mature records with each corresponding boolean explicitly supplied. Always expose sample counts.
+
+Never infer human idle time, CI waiting, or tool time by subtracting request durations. Cost per accepted task is calculated within a comparable task type only when its acceptance boundary is explicit, at least one applicable task reaches it, every applicable scope is complete, and every owned leaf call has recorded cost. Its numerator includes all applicable attempts, retries, reviews, coordinators, and workers. A deployed-only task is not accepted at a live-verification boundary. Suppress a single global efficiency ratio for heterogeneous task types; do not collapse outcomes into generic success.
+
+Prioritize request-to-verified-live elapsed time when evidence supports it, with active model and tool time reported separately. A `task_complete` event, assistant success claim, or repeated completion marker is not acceptance evidence; keep the explicit outcome and evidence annotation authoritative, and never count duplicate markers as separate tasks. Require an analysis version/cutoff and evidence-coverage statement. Historical comparisons show correlation, not causality: match repository, task class, complexity, settings, context, and date, and disclose non-overlapping cohorts.
 
 ## Conservative provider attribution
 
