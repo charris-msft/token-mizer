@@ -14,10 +14,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-RECORD_VERSION = "1.0"
+RECORD_VERSION = "1.1"
 REGISTRY_VERSION = "1.0"
 LEDGER_VERSION = "1.0"
-MODES = {"baseline", "bounded-rug"}
+MODES = {"bounded-rug"}
+SCOPE_STATUSES = {"unknown", "partial", "complete"}
 STATES = {"task", "build", "verify", "repair", "accepted", "blocked"}
 BOUNDARIES = {"ci-passed", "merged", "deployed", "deployed-and-live-verified"}
 ROLES = {"coordinator", "builder", "reviewer", "validator"}
@@ -204,6 +205,7 @@ def new_record(
         "checks": [],
         "evidence": [],
         "provider_model_observations": [],
+        "scope_attestation": {"status": "unknown", "at": None},
         "followup": {"matured": False, "reopened": None, "rolled_back": None, "observed_at": None},
         "events": [],
         "proof_notice": "Annotations are validated for structure only; this helper does not independently prove their truth.",
@@ -216,6 +218,21 @@ def transition_counts(events: list[dict[str, Any]]) -> dict[str, int]:
         "repair_attempts": sum(event["to"] == "repair" for event in events),
         "verifications": sum(event["to"] == "verify" for event in events),
     }
+
+
+def validate_scope_windows(record: dict[str, Any]) -> None:
+    task_start = parse_time(record["created_at"])
+    task_end = parse_time(record["updated_at"])
+    ownership: dict[str, list[tuple[datetime, datetime]]] = {}
+    for scope in record["scopes"]:
+        start = parse_time(scope["start"])
+        end = parse_time(scope["end"]) if scope.get("end") else task_end
+        if start < task_start or end > task_end or end <= start:
+            raise RecordError("scope must be a positive window inside the task window")
+        session_windows = ownership.setdefault(scope["session_id"], [])
+        if any(start < existing_end and existing_start < end for existing_start, existing_end in session_windows):
+            raise RecordError("overlapping scopes for the same session are not allowed")
+        session_windows.append((start, end))
 
 
 def validate_record(record: Any) -> None:
@@ -249,18 +266,25 @@ def validate_record(record: Any) -> None:
         check = event.get("check")
         evidence = event.get("evidence")
         milestone = event.get("milestone")
+        target_revision = event.get("target_revision")
+        target_environment = event.get("target_environment")
         if check is not None:
             require_text(check, "event check")
         if evidence is not None:
             require_text(evidence, "event evidence")
+        if target_revision is not None:
+            require_text(target_revision, "event target revision")
+        if target_environment is not None:
+            require_text(target_environment, "event target environment")
         if milestone is not None and milestone not in BOUNDARIES:
             raise RecordError("event milestone is not a supported boundary")
         event_at = parse_time(event.get("at"))
         if event_at < previous_at:
             raise RecordError("event timestamps must be monotonic")
         require_transition(
-            {"state": state, "counts": replay_counts, "task": task},
+            {"state": state, "counts": replay_counts, "task": task, "events": events[: sequence - 1]},
             target, result, milestone, check, evidence,
+            target_revision, target_environment,
         )
         if target == "build":
             replay_counts["build_attempts"] += 1
@@ -299,6 +323,20 @@ def validate_record(record: Any) -> None:
         parse_time(scope.get("start"))
         if scope.get("end") is not None and parse_time(scope["end"]) <= parse_time(scope["start"]):
             raise RecordError("scope end must be after scope start")
+    attestation = record.get("scope_attestation")
+    if not isinstance(attestation, dict) or attestation.get("status") not in SCOPE_STATUSES:
+        raise RecordError("invalid scope completeness attestation")
+    if attestation["status"] == "unknown":
+        if attestation.get("at") is not None:
+            raise RecordError("unknown scope completeness cannot have an attestation time")
+    else:
+        attested_at = parse_time(attestation.get("at"))
+        if attested_at < created_at:
+            raise RecordError("scope attestation cannot precede task creation")
+    if attestation["status"] == "complete":
+        if record.get("state") not in TERMINAL_STATES:
+            raise RecordError("scope completeness can be attested only for a terminal task")
+        validate_scope_windows(record)
     milestones = record.get("observed_milestones")
     if not isinstance(milestones, list) or any(item not in BOUNDARIES for item in milestones):
         raise RecordError("observed_milestones contains an unsupported boundary")
@@ -315,6 +353,10 @@ def validate_record(record: Any) -> None:
         parse_time(check.get("at"))
         if check.get("evidence") is not None:
             require_text(check["evidence"], "check evidence")
+        if check.get("target_revision") is not None:
+            require_text(check["target_revision"], "check target revision")
+        if check.get("target_environment") is not None:
+            require_text(check["target_environment"], "check target environment")
     evidence_items = record.get("evidence")
     if not isinstance(evidence_items, list):
         raise RecordError("evidence must be an array")
@@ -323,18 +365,28 @@ def validate_record(record: Any) -> None:
             raise RecordError("invalid evidence annotation")
         require_text(evidence.get("ref"), "evidence reference")
         parse_time(evidence.get("at"))
+        if evidence.get("target_revision") is not None:
+            require_text(evidence["target_revision"], "evidence target revision")
+        if evidence.get("target_environment") is not None:
+            require_text(evidence["target_environment"], "evidence target environment")
     expected_checks = [
         {
             "name": event["check"],
             "result": event["result"],
             "at": event["at"],
             "evidence": event.get("evidence"),
+            "target_revision": event.get("target_revision"),
+            "target_environment": event.get("target_environment"),
         }
         for event in events
         if event.get("check")
     ]
     expected_evidence = [
-        {"kind": "annotation", "ref": event["evidence"], "at": event["at"]}
+        {
+            "kind": "annotation", "ref": event["evidence"], "at": event["at"],
+            "target_revision": event.get("target_revision"),
+            "target_environment": event.get("target_environment"),
+        }
         for event in events
         if event.get("evidence")
     ]
@@ -367,7 +419,8 @@ def validate_record(record: Any) -> None:
 
 def require_transition(
     record: dict[str, Any], target: str, result: str, milestone: str | None,
-    check: str | None, evidence: str | None,
+    check: str | None, evidence: str | None, target_revision: str | None,
+    target_environment: str | None,
 ) -> None:
     state = record["state"]
     if state in TERMINAL_STATES:
@@ -385,6 +438,11 @@ def require_transition(
         raise RecordError("milestones can be recorded only by an accepted transition")
     if target == "build" and counts["build_attempts"] >= MAX_BUILD_ATTEMPTS:
         raise RecordError("initial build attempt is already consumed")
+    if target == "verify":
+        if result != "completed":
+            raise RecordError("build or repair -> verify requires result=completed")
+        if not target_revision or not target_environment:
+            raise RecordError("verification requires an exact target revision and environment")
     if target == "repair":
         if result != "failed":
             raise RecordError("verify -> repair requires result=failed")
@@ -392,8 +450,19 @@ def require_transition(
             raise RecordError("repair attempt is already consumed")
         if not check or not evidence:
             raise RecordError("failed verification requires check and evidence")
-    if target == "verify" and result != "completed":
-        raise RecordError("build or repair -> verify requires result=completed")
+    if target in {"repair", "accepted"} or (
+        target == "blocked" and state == "verify" and result == "failed"
+    ):
+        if not target_revision or not target_environment:
+            raise RecordError("verification outcome requires an exact target revision and environment")
+        preceding = record.get("events", [])[-1] if record.get("events") else None
+        if not preceding or preceding.get("to") != "verify":
+            raise RecordError("verification outcome requires a preceding verify transition")
+        if (
+            target_revision != preceding.get("target_revision")
+            or target_environment != preceding.get("target_environment")
+        ):
+            raise RecordError("verification outcome target must match the preceding verify transition")
     if target == "accepted":
         boundary = record["task"]["acceptance_boundary"]
         if result != "passed" or milestone != boundary:
@@ -407,6 +476,8 @@ def require_transition(
             raise RecordError("blocking requires an infrastructure/budget/auth/environment constraint or exhausted failed verification")
         if not evidence:
             raise RecordError("blocked transition requires evidence")
+        if exhausted and not check:
+            raise RecordError("exhausted failed verification requires a check")
 
 
 def apply_transition(
@@ -414,6 +485,7 @@ def apply_transition(
     expected_sequence: int, expected_record_revision: int | None = None,
     at: str | None = None, check: str | None = None,
     evidence: str | None = None, milestone: str | None = None,
+    target_revision: str | None = None, target_environment: str | None = None,
 ) -> dict[str, Any]:
     validate_record(record)
     if target not in STATES:
@@ -429,7 +501,10 @@ def apply_transition(
         raise RecordError(
             f"stale record revision: expected {record['record_revision']}, received {expected_record_revision}"
         )
-    require_transition(record, target, result, milestone, check, evidence)
+    require_transition(
+        record, target, result, milestone, check, evidence,
+        target_revision, target_environment,
+    )
     timestamp = at or utc_now()
     if parse_time(timestamp) < parse_time(record["updated_at"]):
         raise RecordError("event timestamp cannot precede the persisted record")
@@ -444,6 +519,8 @@ def apply_transition(
         "check": check,
         "evidence": evidence,
         "milestone": milestone,
+        "target_revision": target_revision,
+        "target_environment": target_environment,
     }
     updated["events"].append(event)
     updated["state"] = target
@@ -452,9 +529,19 @@ def apply_transition(
     updated["updated_at"] = timestamp
     updated["counts"] = transition_counts(updated["events"])
     if check:
-        updated["checks"].append({"name": check, "result": result, "at": timestamp, "evidence": evidence})
+        updated["checks"].append(
+            {
+                "name": check, "result": result, "at": timestamp, "evidence": evidence,
+                "target_revision": target_revision, "target_environment": target_environment,
+            }
+        )
     if evidence:
-        updated["evidence"].append({"kind": "annotation", "ref": evidence, "at": timestamp})
+        updated["evidence"].append(
+            {
+                "kind": "annotation", "ref": evidence, "at": timestamp,
+                "target_revision": target_revision, "target_environment": target_environment,
+            }
+        )
     if milestone and milestone not in updated["observed_milestones"]:
         updated["observed_milestones"].append(milestone)
     validate_record(updated)
@@ -477,6 +564,28 @@ def add_scope(
         raise RecordError("scope end must be after scope start")
     updated = deepcopy(record)
     updated["scopes"].append({"session_id": require_text(session_id, "session id"), "role": role, "start": start, "end": end})
+    updated["record_revision"] += 1
+    validate_record(updated)
+    return updated
+
+
+def attest_scope(
+    record: dict[str, Any], status: str, expected_record_revision: int | None = None,
+    at: str | None = None,
+) -> dict[str, Any]:
+    validate_record(record)
+    if expected_record_revision is not None and expected_record_revision != record["record_revision"]:
+        raise RecordError("stale record revision")
+    if status not in SCOPE_STATUSES - {"unknown"}:
+        raise RecordError("scope attestation must be partial or complete")
+    current = record["scope_attestation"]["status"]
+    if current == "complete" or (current == "partial" and status != "complete"):
+        raise RecordError("scope attestation cannot be reset or downgraded")
+    timestamp = at or utc_now()
+    if parse_time(timestamp) < parse_time(record["created_at"]):
+        raise RecordError("scope attestation cannot precede task creation")
+    updated = deepcopy(record)
+    updated["scope_attestation"] = {"status": status, "at": timestamp}
     updated["record_revision"] += 1
     validate_record(updated)
     return updated
@@ -549,6 +658,14 @@ def export_ledger(record: dict[str, Any], analysis_id: str, cutoff: str) -> dict
         "accepted": record["task"]["acceptance_boundary"],
         "blocked": "blocked",
     }.get(record["state"], "unfinished")
+    accepted_event = record["events"][-1] if record["state"] == "accepted" else None
+    scope_status = record["scope_attestation"]["status"]
+    scope_attested_at = record["scope_attestation"]["at"]
+    if scope_attested_at is not None and parse_time(scope_attested_at) > cutoff_time:
+        scope_status = "unknown"
+        scope_attested_at = None
+    if scope_status == "complete":
+        validate_scope_windows(record)
     task: dict[str, Any] = {
         "id": record["task"]["id"],
         "label": record["task"]["label"],
@@ -557,7 +674,11 @@ def export_ledger(record: dict[str, Any], analysis_id: str, cutoff: str) -> dict
         "end": end.isoformat(),
         "outcome": outcome,
         "observed_milestones": record["observed_milestones"],
-        "scope_complete": record["state"] in TERMINAL_STATES,
+        "scope_complete": scope_status == "complete",
+        "scope_status": scope_status,
+        "scope_attested_at": scope_attested_at,
+        "revision": accepted_event.get("target_revision") if accepted_event else record["revision"],
+        "environment": accepted_event.get("target_environment") if accepted_event else record["environment"],
         "evidence": record["evidence"],
         "scopes": scopes,
         "pilot_mode": record["task"]["mode"],
@@ -568,11 +689,19 @@ def export_ledger(record: dict[str, Any], analysis_id: str, cutoff: str) -> dict
             "repair_attempts": record["counts"]["repair_attempts"],
             "verifications": record["counts"]["verifications"],
             "provider_model_observations": record["provider_model_observations"],
+            "scope_status": scope_status,
+            "verified_target": {
+                "revision": accepted_event.get("target_revision"),
+                "environment": accepted_event.get("target_environment"),
+                "check": accepted_event.get("check"),
+                "evidence": accepted_event.get("evidence"),
+                "at": accepted_event.get("at"),
+            } if accepted_event else None,
             "proof_notice": record["proof_notice"],
         },
     }
     followup = record["followup"]
-    if followup["matured"]:
+    if followup["matured"] and parse_time(followup["observed_at"]) <= cutoff_time:
         task.update(
             {
                 "followup_matured": True,
@@ -624,6 +753,8 @@ def build_parser() -> argparse.ArgumentParser:
     transition.add_argument("--check")
     transition.add_argument("--evidence")
     transition.add_argument("--milestone", choices=sorted(BOUNDARIES))
+    transition.add_argument("--target-revision")
+    transition.add_argument("--target-environment")
 
     scope = subparsers.add_parser("add-scope")
     scope.add_argument("--file", type=Path, required=True)
@@ -632,6 +763,12 @@ def build_parser() -> argparse.ArgumentParser:
     scope.add_argument("--start", required=True)
     scope.add_argument("--end")
     scope.add_argument("--expected-record-revision", type=int, required=True)
+
+    attest = subparsers.add_parser("attest-scope")
+    attest.add_argument("--file", type=Path, required=True)
+    attest.add_argument("--status", choices=("partial", "complete"), required=True)
+    attest.add_argument("--at")
+    attest.add_argument("--expected-record-revision", type=int, required=True)
 
     observe = subparsers.add_parser("observe-model")
     observe.add_argument("--file", type=Path, required=True)
@@ -701,12 +838,18 @@ def main(argv: list[str] | None = None) -> int:
                             record, args.to, args.result, args.event_id,
                             args.expected_sequence, args.expected_record_revision,
                             args.at, args.check, args.evidence, args.milestone,
+                            args.target_revision, args.target_environment,
                         )
                         atomic_write(record_path, record)
                     elif args.command == "add-scope":
                         record = add_scope(
                             record, args.session_id, args.role, args.start,
                             args.end, args.expected_record_revision,
+                        )
+                        atomic_write(record_path, record)
+                    elif args.command == "attest-scope":
+                        record = attest_scope(
+                            record, args.status, args.expected_record_revision, args.at,
                         )
                         atomic_write(record_path, record)
                     elif args.command == "observe-model":

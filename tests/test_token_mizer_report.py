@@ -733,6 +733,70 @@ class TokenMizerReportTests(unittest.TestCase):
         self.assertIsNone(portfolio["reopened_rate_matured_only"])
         self.assertIsNone(portfolio["rollback_rate_matured_only"])
 
+    def test_future_followup_is_not_counted_before_cutoff(self):
+        self.add_usage(session_id="future", input_tokens=10, total_nano_aiu=1_000_000_000)
+        ledger = self.root / "future-followup.json"
+        ledger.write_text(json.dumps({
+            "schema_version": "1.0", "analysis_id": "future-followup", "cutoff": "2026-09-02T00:00:00Z",
+            "acceptance_boundaries": {"test": "ci-passed"},
+            "tasks": [{
+                "id": "future", "label": "Future", "type": "test", "outcome": "ci-passed", "scope_complete": True,
+                "scope_status": "complete", "scope_attested_at": "2026-09-03T00:00:00Z",
+                "followup_matured": True, "reopened": True, "rolled_back": False,
+                "followup_observed_at": "2026-09-03T00:00:00Z", "evidence": [],
+                "scopes": [{"session_id": "future", "start": "2026-09-01T00:00:00Z", "end": "2026-09-02T00:00:00Z"}],
+            }],
+        }), encoding="utf-8")
+
+        report = REPORT.build_task_report(self.db, ledger)
+
+        self.assertFalse(report["tasks"][0]["followup_matured"])
+        self.assertFalse(report["tasks"][0]["scope_complete"])
+        self.assertEqual(report["tasks"][0]["scope_status"], "unknown")
+        self.assertIsNone(report["tasks"][0]["scope_attested_at"])
+        self.assertEqual(report["portfolio"]["followup_matured_tasks"], 0)
+        self.assertEqual(report["portfolio"]["reopened_explicit_samples"], 0)
+        self.assertIsNone(report["portfolio"]["credits_per_accepted_task"])
+
+    def test_pilot_strata_separate_mode_class_and_boundary(self):
+        for session, minute in (("base-change", 5), ("rug-change", 15), ("base-deploy", 25)):
+            self.add_usage(
+                session_id=session, created_at=f"2026-09-01T00:{minute:02d}:00Z",
+                input_tokens=10, output_tokens=5, total_nano_aiu=1_000_000_000,
+            )
+        tasks = [
+            ("base-change", "baseline", "change", "ci-passed", "2026-09-01T00:00:00Z", "2026-09-01T00:10:00Z"),
+            ("rug-change", "bounded-rug", "change", "ci-passed", "2026-09-01T00:10:00Z", "2026-09-01T00:20:00Z"),
+            ("base-deploy", "baseline", "deployment", "deployed", "2026-09-01T00:20:00Z", "2026-09-01T00:30:00Z"),
+        ]
+        ledger = self.root / "strata.json"
+        ledger.write_text(json.dumps({
+            "schema_version": "1.0", "analysis_id": "strata", "cutoff": "2026-09-01T01:00:00Z",
+            "acceptance_boundaries": {"change": "ci-passed", "deployment": "deployed"},
+            "tasks": [
+                {
+                    "id": session, "label": session, "type": task_class, "outcome": outcome,
+                    "scope_complete": True, "pilot_mode": mode, "evidence": [],
+                    "scopes": [{"session_id": session, "start": start, "end": end}],
+                }
+                for session, mode, task_class, outcome, start, end in tasks
+            ],
+        }), encoding="utf-8")
+
+        strata = REPORT.build_task_report(self.db, ledger)["portfolio"]["pilot_strata"]
+
+        self.assertEqual(len(strata), 3)
+        self.assertEqual(
+            {(item["mode"], item["task_class"], item["acceptance_boundary"]) for item in strata},
+            {
+                ("baseline", "change", "ci-passed"),
+                ("bounded-rug", "change", "ci-passed"),
+                ("baseline", "deployment", "deployed"),
+            },
+        )
+        self.assertTrue(all(item["tokens_per_accepted_task"] == 15 for item in strata))
+        self.assertTrue(all(item["credits_per_accepted_task"] == 1.0 for item in strata))
+
     def test_task_scope_normalizes_offsets_and_excludes_exact_end(self):
         self.add_usage(session_id="offset", created_at="2026-09-01T00:30:00Z")
         self.add_usage(session_id="offset", created_at="2026-09-01T01:00:00Z", duration_ms=2000)

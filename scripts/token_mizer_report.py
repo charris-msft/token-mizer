@@ -522,6 +522,19 @@ def normalize_task_ledger(ledger: dict[str, Any]) -> list[dict[str, Any]]:
             raise ReportUnavailable(f"task {task_id} requires a nonempty type")
         if not isinstance(raw.get("scope_complete"), bool):
             raise ReportUnavailable(f"task {task_id} requires boolean scope_complete")
+        scope_status = raw.get("scope_status", "complete" if raw["scope_complete"] else "unknown")
+        if scope_status not in {"unknown", "partial", "complete"}:
+            raise ReportUnavailable(f"task {task_id} has invalid scope_status")
+        if raw["scope_complete"] != (scope_status == "complete"):
+            raise ReportUnavailable(f"task {task_id} scope_complete conflicts with scope_status")
+        scope_attested_at = raw.get("scope_attested_at")
+        if scope_attested_at is not None:
+            try:
+                if parse_timestamp(scope_attested_at) > ledger_cutoff:
+                    scope_status = "unknown"
+                    scope_attested_at = None
+            except (TypeError, ValueError) as error:
+                raise ReportUnavailable(f"task {task_id} has invalid scope_attested_at") from error
         if "acceptance_applicable" in raw and not isinstance(raw["acceptance_applicable"], bool):
             raise ReportUnavailable(f"task {task_id} acceptance_applicable must be boolean")
         if not isinstance(raw.get("evidence"), list):
@@ -589,6 +602,37 @@ def normalize_task_ledger(ledger: dict[str, Any]) -> list[dict[str, Any]]:
                         f"{scope['session_id']}"
                     )
             task_ownership[scope["session_id"]].append((scope["start"], scope["end"]))
+        followup_matured = raw.get("followup_matured") is True
+        followup_observed_at = raw.get("followup_observed_at")
+        if followup_matured and followup_observed_at is not None:
+            try:
+                followup_matured = parse_timestamp(followup_observed_at) <= ledger_cutoff
+            except (TypeError, ValueError) as error:
+                raise ReportUnavailable(f"task {task_id} has invalid followup_observed_at") from error
+        bounded = raw.get("bounded_rug")
+        acceptance_evidence_valid = True
+        if isinstance(bounded, dict) and bounded.get("state") == "accepted":
+            verified = bounded.get("verified_target")
+            acceptance_evidence_valid = (
+                isinstance(verified, dict)
+                and isinstance(verified.get("revision"), str)
+                and bool(verified["revision"])
+                and isinstance(verified.get("environment"), str)
+                and bool(verified["environment"])
+                and isinstance(verified.get("check"), str)
+                and bool(verified["check"])
+                and isinstance(verified.get("evidence"), str)
+                and bool(verified["evidence"])
+                and raw.get("revision") == verified.get("revision")
+                and raw.get("environment") == verified.get("environment")
+                and any(
+                    isinstance(item, dict)
+                    and item.get("ref") == verified.get("evidence")
+                    and item.get("target_revision") == verified.get("revision")
+                    and item.get("target_environment") == verified.get("environment")
+                    for item in raw["evidence"]
+                )
+            )
         normalized.append(
             {
                 **raw,
@@ -598,8 +642,14 @@ def normalize_task_ledger(ledger: dict[str, Any]) -> list[dict[str, Any]]:
                 "start": task_start,
                 "end": task_end,
                 "scopes": normalized_scopes,
-                "scope_complete": raw.get("scope_complete") is True,
+                "scope_complete": scope_status == "complete",
+                "scope_status": scope_status,
+                "scope_attested_at": scope_attested_at,
                 "acceptance_applicable": raw.get("acceptance_applicable", True) is True,
+                "acceptance_evidence_valid": acceptance_evidence_valid,
+                "followup_matured": followup_matured,
+                "reopened": raw.get("reopened") if followup_matured else None,
+                "rolled_back": raw.get("rolled_back") if followup_matured else None,
             }
         )
 
@@ -761,7 +811,12 @@ def summarize_task(task: dict[str, Any], rows: list[dict[str, Any]]) -> dict[str
         "outcome": task["outcome"],
         "observed_milestones": task["observed_milestones"],
         "scope_complete": task["scope_complete"],
+        "scope_status": task["scope_status"],
+        "scope_attested_at": task.get("scope_attested_at"),
         "acceptance_applicable": task["acceptance_applicable"],
+        "acceptance_evidence_valid": task["acceptance_evidence_valid"],
+        "revision": task.get("revision"),
+        "environment": task.get("environment"),
         "pilot_mode": task.get("pilot_mode", "unspecified"),
         "bounded_rug": task.get("bounded_rug"),
         "annotation_window": {
@@ -808,7 +863,11 @@ def summarize_task(task: dict[str, Any], rows: list[dict[str, Any]]) -> dict[str
 
 
 def task_reached_boundary(task: dict[str, Any], boundary: str | None) -> bool:
-    if boundary is None or task["outcome"] in {"failed", "blocked", "unfinished"}:
+    if (
+        boundary is None
+        or task["outcome"] in {"failed", "blocked", "unfinished"}
+        or task.get("acceptance_evidence_valid") is False
+    ):
         return False
     return task["outcome"] == boundary or boundary in task["observed_milestones"]
 
@@ -1007,6 +1066,85 @@ def build_task_report(db_path: Path, ledger_path: Path) -> dict[str, Any]:
                 "comparison_notice": "Compare only identical task classes and acceptance boundaries; observational results do not establish causality.",
             }
         )
+    pilot_strata = []
+    strata_keys = sorted(
+        {
+            (item["pilot_mode"], item["type"], acceptance_boundaries.get(item["type"]))
+            for item in summaries
+        },
+        key=lambda value: (value[0], value[1], value[2] or ""),
+    )
+    for mode, task_class, boundary in strata_keys:
+        members = [
+            item for item in summaries
+            if item["pilot_mode"] == mode and item["type"] == task_class
+        ]
+        applicable = [item for item in members if item["acceptance_applicable"]]
+        accepted_count = sum(task_reached_boundary(item, boundary) for item in applicable)
+        calls = sum(item["calls"] for item in applicable)
+        input_known = sum(item["input_token_records"] for item in applicable)
+        output_known = sum(item["output_token_records"] for item in applicable)
+        known_costs = sum(item["known_cost_records"] for item in applicable)
+        scopes_complete = bool(applicable) and all(
+            item["scope_complete"] and item["calls"] > 0 for item in applicable
+        )
+        token_coverage_complete = calls > 0 and input_known == calls and output_known == calls
+        cost_coverage_complete = calls > 0 and known_costs == calls
+        tokens = sum(item["input_tokens"] + item["output_tokens"] for item in applicable)
+        credits_values = [
+            item["recorded_ai_credits"]
+            for item in applicable
+            if item["recorded_ai_credits"] is not None
+        ]
+        credits = sum(credits_values) if credits_values else None
+        elapsed_total = sum(item["annotation_window"]["elapsed_ms"] for item in applicable)
+        active_total = sum(item["inference_resource_ms"] for item in applicable)
+        ratios_available = accepted_count > 0 and scopes_complete
+        matured_members = [item for item in applicable if item["followup_matured"]]
+        pilot_strata.append(
+            {
+                "mode": mode,
+                "task_class": task_class,
+                "acceptance_boundary": boundary,
+                "tasks": len(members),
+                "attempted_tasks": len(applicable),
+                "accepted_tasks": accepted_count,
+                "failed_tasks": sum(item["outcome"] == "failed" for item in applicable),
+                "blocked_tasks": sum(item["outcome"] == "blocked" for item in applicable),
+                "unfinished_tasks": sum(item["outcome"] == "unfinished" for item in applicable),
+                "calls": calls,
+                "input_tokens": sum(item["input_tokens"] for item in applicable),
+                "output_tokens": sum(item["output_tokens"] for item in applicable),
+                "token_record_coverage": {
+                    "input": {"known": input_known, "total": calls},
+                    "output": {"known": output_known, "total": calls},
+                },
+                "known_cost_records": known_costs,
+                "unknown_cost_records": calls - known_costs,
+                "cost_coverage": cost_status([{}] * calls, known_costs),
+                "recorded_ai_credits_all_attempts": credits,
+                "annotated_elapsed_ms_all_attempts": elapsed_total,
+                "model_active_ms_all_attempts": active_total,
+                "build_attempts": sum((item.get("bounded_rug") or {}).get("build_attempts", 0) for item in applicable),
+                "repair_attempts": sum((item.get("bounded_rug") or {}).get("repair_attempts", 0) for item in applicable),
+                "verifications": sum((item.get("bounded_rug") or {}).get("verifications", 0) for item in applicable),
+                "followup_matured_tasks": len(matured_members),
+                "reopened_explicit_samples": sum(isinstance(item["reopened"], bool) for item in matured_members),
+                "reopened_tasks": sum(item["reopened"] is True for item in matured_members),
+                "tokens_per_accepted_task": tokens / accepted_count
+                if ratios_available and token_coverage_complete else None,
+                "elapsed_ms_per_accepted_task": elapsed_total / accepted_count
+                if ratios_available else None,
+                "model_active_ms_per_accepted_task": active_total / accepted_count
+                if ratios_available else None,
+                "credits_per_accepted_task": credits / accepted_count
+                if ratios_available and cost_coverage_complete and credits is not None else None,
+                "ratio_unavailable_reason": None
+                if ratios_available and token_coverage_complete and cost_coverage_complete
+                else "ratios require accepted tasks, explicit complete nonempty scopes, and complete relevant token/cost coverage",
+                "comparison_notice": "Compare only the same task class and acceptance boundary; observational results do not establish causality or savings.",
+            }
+        )
     team_models: defaultdict[str, dict[str, float | int]] = defaultdict(
         lambda: {
             "calls": 0,
@@ -1101,6 +1239,7 @@ def build_task_report(db_path: Path, ledger_path: Path) -> dict[str, Any]:
             "rollback_explicit_samples": len(rollback_samples),
             "task_types": task_types,
             "pilot_modes": pilot_modes,
+            "pilot_strata": pilot_strata,
             "team_model_resources": team_resources,
         },
         "definitions": {
