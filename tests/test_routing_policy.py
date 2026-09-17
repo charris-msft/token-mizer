@@ -10,6 +10,7 @@ ROUTE = ROOT / "skills" / "token-mizer-route" / "SKILL.md"
 HANDOFF = ROOT / "skills" / "token-mizer-handoff" / "SKILL.md"
 BUDGET = ROOT / "skills" / "token-mizer-budget" / "SKILL.md"
 REPORT = ROOT / "skills" / "token-mizer-report" / "SKILL.md"
+BOUNDED_RUG = ROOT / "skills" / "token-mizer-bounded-rug" / "SKILL.md"
 README = ROOT / "README.md"
 POLICY = ROOT / "examples" / "policy.example.json"
 PLUGIN = ROOT / "plugin.json"
@@ -24,7 +25,7 @@ class RoutingPolicyTests(unittest.TestCase):
     def test_release_versions_match(self):
         plugin = json.loads(read(PLUGIN))
         marketplace = json.loads(read(MARKETPLACE))
-        self.assertEqual("1.4.0", plugin["version"])
+        self.assertEqual("1.5.0", plugin["version"])
         self.assertEqual(plugin["version"], marketplace["metadata"]["version"])
         self.assertEqual(plugin["version"], marketplace["plugins"][0]["version"])
 
@@ -62,6 +63,21 @@ class RoutingPolicyTests(unittest.TestCase):
         self.assertIn("edited-file tests alone", handoff)
         self.assertIn("Forge Foundry Astra", readme)
 
+    def test_bounded_rug_is_opt_in_bounded_and_risk_reviewed(self):
+        agent = read(AGENT)
+        route = read(ROUTE)
+        handoff = read(HANDOFF)
+        bounded = read(BOUNDED_RUG)
+        self.assertIn("only after the user opts the task into that pilot", agent)
+        self.assertIn("never changes the default workflow silently", agent)
+        self.assertIn("at most one coordinator-diagnosed repair", agent)
+        self.assertIn("second failed verification blocks", route)
+        self.assertIn("one initial implementation and at most one repair", handoff)
+        self.assertIn("substantial, risky, or previously failed work", handoff)
+        self.assertIn("Do not create a reviewer for every file", bounded)
+        self.assertIn("does not independently prove", bounded)
+        self.assertIn("Missing cost remains unknown, never zero", bounded)
+
     def test_report_distinguishes_proactive_and_capacity_routes(self):
         report = read(REPORT)
         self.assertIn("proactive Gemini 3.8 Flash builders", report)
@@ -72,7 +88,10 @@ class RoutingPolicyTests(unittest.TestCase):
     def test_public_files_do_not_bind_personal_provider_guid(self):
         public_text = "\n".join(
             read(path)
-            for path in (AGENT, ROUTE, HANDOFF, BUDGET, REPORT, README, POLICY, PLUGIN, MARKETPLACE)
+            for path in (
+                AGENT, ROUTE, HANDOFF, BUDGET, REPORT, BOUNDED_RUG,
+                README, POLICY, PLUGIN, MARKETPLACE, ROOT / "scripts" / "bounded_rug.py",
+            )
         )
         self.assertIsNone(
             re.search(
