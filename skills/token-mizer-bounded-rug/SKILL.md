@@ -10,7 +10,7 @@ Apply only while Token Mizer is selected and the user has opted this task into t
 ## Contract
 
 1. Define one coherent task, its class, coordinator/worker/validator scopes, exact acceptance boundary, starting revision, and environment.
-2. Keep tasks needing five or fewer direct calls in the coordinator. For substantial work, use one suitable builder on a constrained Foundry connection. Reuse that worker and compact checkpoints.
+2. Keep tasks needing five or fewer direct calls in the coordinator. For substantial work, estimate total context first and use one suitable context-fitting builder. Reuse that worker and compact checkpoints. Large-context work requires confirmed GitHub capacity; it must block rather than silently use small-context Luna when Flash is denied.
 3. Run one initial implementation, then the deterministic gates for the selected boundary. Bind verification to the exact built revision and environment; the starting revision is not a substitute.
 4. If verification fails because of code, the Astra coordinator diagnoses the failure as a narrowly bounded rubber duck. Permit at most one repair implementation, then verify again.
 5. If the repaired result fails, record `blocked` with both failures and stop automatic implementation attempts. Return the checkpoint and next decision. Never reset counters by resuming or recreating the same task record.

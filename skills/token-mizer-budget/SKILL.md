@@ -16,11 +16,10 @@ Read the private policy from `$COPILOT_HOME/token-mizer/policy.json` when `COPIL
 3. Read authoritative account-wide spend and task-attributed costs with timestamps. Tokens, API calls, and generic cost multipliers are not dollars.
 4. Account for concurrent work, pending charges, and prior reserve use. A logical task shares one allowance across its coordinator, workers, retries, and reviews.
 5. Require a supported way to keep in-flight spending within the remaining allowance. This instruction-only plugin does not provide metering, atomic reservations, or a technical cap.
-6. If any prerequisite is missing, block automatic paid use. Offer continued Foundry work or request a specific exception naming the task, model, reason, requested allowance, and missing enforcement.
-
+6. If any prerequisite is missing, block automatic paid use. For ordinary context-fitting work, verified Foundry Luna may continue. For large-context work, do not silently substitute Luna: report the missing GitHub budget, capacity, or enforcement and request a specific exception naming the task, model, reason, requested allowance, and missing enforcement.
 For substantial bounded implementation or build work, an otherwise valid policy may authorize proactive `gemini-3.8-flash` use immediately; it does not need five minutes of prior Foundry throttling. Confirm the accepted runtime ID, task allowance, authoritative metering, pending commitments, and bounded in-flight enforcement for that one assignment. Preserve a provider-qualified ID supplied by the host, but treat the bare ID as GitHub-billed unless authoritative metadata proves otherwise.
 
-Separately, five minutes of evidenced Foundry rate limiting makes capacity fallback eligible, not approved. Authentication, environment, and provider-configuration failures never satisfy this condition. Gemini preference must not bypass that threshold for a separate capacity incident. Never fabricate spend, silently use reserve, approve an increase, or imply that user preference overrides a zero-budget period.
+Separately, five minutes of evidenced Foundry rate limiting makes capacity fallback eligible, not approved. Authentication, environment, and provider-configuration failures never satisfy this condition. Gemini preference must not bypass that threshold for a separate capacity incident. Never fabricate spend, silently use reserve, approve an increase, or imply that user preference overrides a zero-budget period. Never claim a Foundry context tier enlarges a host-reported window.
 
 ## Report
 

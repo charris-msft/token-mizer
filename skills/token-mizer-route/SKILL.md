@@ -19,26 +19,31 @@ For a local mapping, form runtime IDs as `provider.connection_id/model-name` unl
 | Model family | Role |
 |---|---|
 | Astra | Recommended inherited coordinator: planning, decomposition, hard decisions, verification, and diagnosis after a failed first fix |
-| Gemini 3.8 Flash | Preferred policy-authorized builder for substantial, bounded implementation or build work |
-| Sol | No-paid-budget or unavailable-Gemini fallback for routine work and coordination |
-| Luna | Cheap bounded non-build extraction, classification, formatting, or mechanical work with objective checks |
+| Gemini 3.8 Flash | Preferred policy-authorized GitHub model when estimated context fits and paid gates pass |
+| Luna | Foundry fallback for context-fitting bounded work and cheap non-build extraction, classification, formatting, or mechanical work |
+| Sol | Never selected automatically; Sol only on explicit user override |
 
 No Terra route is configured. Preserve a provider-qualified ID that the host actually supplies. A bare `gemini-3.8-flash` ID is GitHub-billed unless authoritative host metadata proves otherwise. Never invent a Foundry Gemini route, infer a provider from an unprefixed model name, silently remove a provider prefix, or substitute a paid model without authorization.
 
 ## Execute
 
 1. Keep work requiring five or fewer direct tool calls in the inherited coordinator.
-2. Prefer a provider-qualified Astra coordinator selected by the user before Token Mizer. Keep Astra planning and narration compact, avoid repeated reads, and retain hard or high-risk decisions.
-3. For substantial bounded implementation or build work, immediately evaluate proactive Gemini eligibility under `token-mizer-budget`. The five-minute capacity threshold does not apply to this proactive route.
-4. If Gemini is unavailable, not authorized, or cannot be safely bounded, use `provider.default_model` as the Foundry Sol fallback. Use `provider.bounded_task_model` only for suitable bounded non-build work.
-5. After a failed first implementation or fix, use `provider.escalation_model` for a bounded rubber-duck diagnosis with the reproduction, evidence, and unresolved question. In the bounded-RUG pilot, that diagnosis may authorize the single repair attempt; a second failed verification blocks further automatic implementation.
-6. Delegate self-contained work using `token-mizer-handoff`. Prefer one worker and parallelize only independent work with measurable benefit.
+2. Estimate total context before delegation: instructions, tool schemas, conversation history, evidence, expected output, and headroom. Check current coordinator context before overflow. Use host-reported capacity when available; unknown capacity is not a fit. Apply this context-fit eligibility before alternation or cost preference.
+3. Check the current coordinator too. An instruction-only selected agent cannot change its host model or context window. If the coordinator is unsuitable, recommend or start an authorized GitHub session with a compact, lossless handoff; routing one child does not enlarge the parent.
+4. Prefer a provider-qualified Astra coordinator selected by the user before Token Mizer. Keep Astra planning and narration compact, avoid repeated reads, and retain hard or high-risk decisions.
+5. For substantial bounded implementation or build work, evaluate proactive Gemini eligibility under `token-mizer-budget` only after context fit. The five-minute capacity threshold does not apply to this proactive route.
+6. If both Gemini and Luna are available, authorized, and context-fitting, alternate using the durable assignment helper. If Flash is blocked for a large-context task, block and explain the missing budget or capacity permission. Never silently fall back to Luna or invent a premium route.
+7. If only Luna is context-fitting, use it for ordinary work. Sol is never an automatic fallback. Use it only when the user explicitly selects Sol.
+8. After a failed first implementation or fix, use `provider.escalation_model` for a bounded rubber-duck diagnosis with the reproduction, evidence, and unresolved question. In the bounded-RUG pilot, that diagnosis may authorize the single repair attempt; a second failed verification blocks further automatic implementation.
+9. Delegate self-contained work using `token-mizer-handoff`. Prefer one worker and parallelize only independent work with measurable benefit.
+
+Record task identity/class/boundary, context-needed and capacity evidence, eligibility exclusions, intended and actual provider/model, selection reason, attempts, reassignments, and verified outcome. Do not claim randomized or fair comparison when context, authorization, or budget constrained selection.
 
 ## Policy-gated paid routes
 
 Keep these routes separate:
 
-- **Proactive Gemini builder:** does not require prior Foundry throttling, but does require a valid nonzero policy, authoritative account-wide spend and pending-commitment data, enforceable bounded in-flight spend, a bounded task allowance, and any required explicit approval. User preference authorizes consideration, not unmetered use. Missing, expired, zero-valued, or unenforceable policy blocks Gemini and routes to Foundry Sol.
+- **Proactive Gemini builder:** does not require prior Foundry throttling, but does require a valid nonzero policy, authoritative account-wide spend and pending-commitment data, enforceable bounded in-flight spend, a bounded task allowance, confirmed context fit, and any required explicit approval. User preference authorizes consideration, not unmetered use. Missing, expired, zero-valued, or unenforceable policy blocks Gemini. For large-context work, that block is a hard stop rather than a Luna fallback.
 - **Capacity fallback:** becomes eligible for evaluation only after five minutes of evidenced Foundry rate-limit blocking. It still requires every spending gate above. Proactive Gemini preference must not bypass this threshold for a separate capacity incident.
 
 Each paid decision is valid for one bounded assignment. Record policy eligibility, approval, attempted route, accepted runtime ID, actual observed use, and outcome as separate facts.
@@ -48,7 +53,7 @@ Each paid decision is valid for one bounded assignment. Record policy eligibilit
 Classify the failure before retrying:
 
 - **Authentication or environment:** credential errors, unavailable Azure CLI tokens, missing login, invalid tenant, or inaccessible credential helpers are not throttling. Stop repeated inference immediately. Report the exact recovery action, such as installing Azure CLI or asking the user to run `az login`, without performing login automatically or exposing tokens. Do not switch to a paid provider.
-- **Unavailable provider or model:** rejected connection IDs, unsupported runtime IDs, and missing catalog entries require configuration recovery. Do not infer another provider from the model name. An unavailable Gemini route falls back honestly to Foundry Sol.
+- **Unavailable provider or model:** rejected connection IDs, unsupported runtime IDs, and missing catalog entries require configuration recovery. Do not infer another provider from the model name. An unavailable Gemini route falls back honestly to Foundry Luna for ordinary context-fitting work; large-context work blocks if GitHub capacity is unavailable.
 - **Capacity contention:** only explicit 429, TPM, quota, capacity, or documented throttling responses qualify. Treat Sol, Astra, and Luna on the same connection as potentially sharing one constrained pool. Switching Foundry models is not a guaranteed workaround.
 - **Task failure:** tool, test, or reasoning failures are not provider capacity failures. Follow the normal fix and escalation policy.
 

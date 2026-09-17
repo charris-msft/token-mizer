@@ -205,6 +205,7 @@ def new_record(
         "checks": [],
         "evidence": [],
         "provider_model_observations": [],
+        "model_assignments": [],
         "scope_attestation": {"status": "unknown", "at": None},
         "followup": {"matured": False, "reopened": None, "rolled_back": None, "observed_at": None},
         "events": [],
@@ -398,6 +399,25 @@ def validate_record(record: Any) -> None:
     observations = record.get("provider_model_observations")
     if not isinstance(observations, list):
         raise RecordError("provider_model_observations must be an array")
+    assignments = record.get("model_assignments", [])
+    if not isinstance(assignments, list):
+        raise RecordError("model_assignments must be an array")
+    seen_assignments = set()
+    for assignment in assignments:
+        if not isinstance(assignment, dict):
+            raise RecordError("invalid model assignment")
+        assignment_id = require_text(assignment.get("assignment_id"), "assignment id")
+        if assignment_id in seen_assignments:
+            raise RecordError("duplicate model assignment")
+        seen_assignments.add(assignment_id)
+        for key in ("task_id", "task_class", "acceptance_boundary", "selection_reason", "selected_provider", "selected_model", "outcome"):
+            require_text(assignment.get(key), f"assignment {key}")
+        if not isinstance(assignment.get("eligibility"), list):
+            raise RecordError("assignment eligibility must be an array")
+        if not isinstance(assignment.get("attempts"), int) or assignment["attempts"] < 0:
+            raise RecordError("assignment attempts must be a nonnegative integer")
+        if not isinstance(assignment.get("reassignments"), int) or assignment["reassignments"] < 0:
+            raise RecordError("assignment reassignments must be a nonnegative integer")
     for observation in observations:
         if not isinstance(observation, dict) or observation.get("role") not in ROLES:
             raise RecordError("invalid provider/model observation")
@@ -611,6 +631,25 @@ def add_observation(
     return updated
 
 
+def add_assignment(
+    record: dict[str, Any], assignment: dict[str, Any], expected_record_revision: int | None = None,
+) -> dict[str, Any]:
+    validate_record(record)
+    if expected_record_revision is not None and expected_record_revision != record["record_revision"]:
+        raise RecordError("stale record revision")
+    if record["state"] in TERMINAL_STATES:
+        raise RecordError("cannot add assignment to a terminal record")
+    candidate = deepcopy(assignment)
+    validate_record({**record, "model_assignments": record.get("model_assignments", []) + [candidate]})
+    if any(item["assignment_id"] == candidate["assignment_id"] for item in record.get("model_assignments", [])):
+        raise RecordError("assignment identity already recorded")
+    updated = deepcopy(record)
+    updated.setdefault("model_assignments", []).append(candidate)
+    updated["record_revision"] += 1
+    validate_record(updated)
+    return updated
+
+
 def record_followup(
     record: dict[str, Any], reopened: bool | None, rolled_back: bool | None,
     expected_record_revision: int | None = None, at: str | None = None,
@@ -689,6 +728,7 @@ def export_ledger(record: dict[str, Any], analysis_id: str, cutoff: str) -> dict
             "repair_attempts": record["counts"]["repair_attempts"],
             "verifications": record["counts"]["verifications"],
             "provider_model_observations": record["provider_model_observations"],
+            "model_assignments": record.get("model_assignments", []),
             "scope_status": scope_status,
             "verified_target": {
                 "revision": accepted_event.get("target_revision"),

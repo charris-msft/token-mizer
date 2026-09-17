@@ -1,13 +1,14 @@
 # Token Mizer
 
-Token Mizer is an opt-in GitHub Copilot plugin that uses a Foundry coordinator, policy-authorized Gemini builders, and Foundry fallbacks while minimizing duplicated context, unnecessary calls, and unbounded paid use.
+Token Mizer is an opt-in GitHub Copilot plugin that uses context-first worker-pool routing, a Foundry coordinator, policy-authorized Gemini builders, and Foundry Luna fallbacks while minimizing duplicated context, unnecessary calls, and unbounded paid use.
 
 ## What it does
 
 - **Astra** is the recommended inherited coordinator for planning, hard decisions, compact delegation, verification, and diagnosis after a failed first fix.
 - **Gemini 3.8 Flash** is preferred for substantial bounded implementation and build tasks only when the local paid policy and enforceable spending safeguards authorize it.
-- **Sol** is the no-paid-budget or unavailable-Gemini fallback for routine implementation and coordination.
-- **Luna** remains available for small bounded non-build work with objective acceptance checks.
+- **Luna** is the ordinary Foundry route for context-fitting bounded work when Gemini is unavailable or not authorized.
+- **Sol** is never selected automatically. It is available only when the user explicitly overrides the pool.
+- Context fit is evaluated before alternation or cost preference, using host-reported capacity and a total estimate covering instructions, tool schemas, history, evidence, output, and headroom.
 - **Terra is not used.**
 - Every paid route fails closed unless a valid nonzero local policy, authoritative usage data, and bounded spending controls are available.
 - Authentication failures stop with recovery guidance. Only explicit throttling evidence triggers bounded retry behavior.
@@ -20,11 +21,11 @@ The bundled skills activate automatically only after you select **Token Mizer** 
 1. Install a current [GitHub Copilot CLI](https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/plugins-finding-installing) build with plugin support.
 2. Configure access to Foundry models in your Copilot host.
 3. Copy and complete the local policy example so Token Mizer can map your account-specific provider connection to Sol, Luna, and Astra and can fail closed on paid builders.
-4. Select your provider-qualified Forge Foundry Astra model as the coordinator before selecting Token Mizer. Select Foundry Sol instead when you want the economy coordinator.
+4. Select your provider-qualified Forge Foundry Astra model as the coordinator before selecting Token Mizer. Select Foundry Luna instead when you want the economy coordinator.
 
-The public agent profile is model-unpinned. It inherits the coordinator selected by the host and cannot switch the current coordinator automatically. Selecting provider-qualified Foundry Astra during setup prevents accidental GitHub-billed coordinator use while keeping difficult decisions on the orchestrator. Astra plans compact bounded tasks, assigns eligible builds to Gemini, and verifies the returned evidence. Worker routes use either host catalog metadata or the user-confirmed local provider mapping and must be accepted by the runtime. Token Mizer never removes a provider prefix or silently substitutes a paid model.
+The public agent profile is model-unpinned. It inherits the coordinator selected by the host and cannot switch the current coordinator automatically. Before overflow, Token Mizer checks whether that coordinator has enough context. An instruction-only agent cannot enlarge its host window; when unsuitable, recommend or start an authorized GitHub session and pass a compact faithful handoff. Routing one child does not enlarge the parent. Selecting provider-qualified Foundry Astra during setup prevents accidental GitHub-billed coordinator use while keeping difficult decisions on the orchestrator. Astra plans compact bounded tasks, assigns eligible builds to Gemini, and verifies the returned evidence. Worker routes use either host catalog metadata or the user-confirmed local provider mapping and must be accepted by the runtime. Token Mizer never removes a provider prefix or silently substitutes a paid model.
 
-`gemini-3.8-flash` is treated as GitHub-billed unless authoritative host metadata supplies a provider-qualified ID. Token Mizer preserves a qualified ID the host actually offers and never invents a Foundry Gemini connection. If Gemini is unavailable, not authorized, or cannot be bounded safely, the task stays on Foundry Sol.
+`gemini-3.8-flash` is treated as GitHub-billed unless authoritative host metadata supplies a provider-qualified ID. Token Mizer preserves a qualified ID the host actually offers and never invents a Foundry Gemini connection. If Gemini is unavailable, not authorized, or cannot be bounded safely, an ordinary context-fitting task stays on Foundry Luna. A large-context task does not silently fall back to a small-context Foundry model: it blocks with the missing capacity or budget permission, or uses only a lossless bounded decomposition. Unknown capacity is not treated as fit.
 
 ## Install
 
@@ -80,7 +81,7 @@ Token Mizer never publishes or initializes your budget. To create a local policy
 
 Set `provider.connection_id` to the Foundry connection ID confirmed for your account and keep the model names aligned with runtime-accepted IDs. The optional `github_models.bounded_builder_model` selects the preferred paid builder; `gemini-3.8-flash` is the current default preference when the host exposes it. Existing policies without this optional object remain valid. Replace the example dates and zero amounts locally. Keep the real file out of source control. Zero values, missing files, invalid files, expired dates, and unavailable enforcement disable Gemini and every automatic paid route while leaving correctly mapped Foundry routing available.
 
-The policy is an allocation, not a live billing system. Token Mizer cannot meter billing, reserve funds, or impose a technical spending cap. Without authoritative usage and bounded-spend enforcement, it remains on Foundry or asks for a specific exception rather than spending automatically. The Gemini preference authorizes proactive consideration for a suitable bounded build, not unmetered use and not an override of a zero-budget period.
+The policy is an allocation, not a live billing system. Token Mizer cannot meter billing, reserve funds, or impose a technical spending cap. Without authoritative usage and bounded-spend enforcement, it remains on Foundry or asks for a specific exception rather than spending automatically. The Gemini preference authorizes proactive consideration for a suitable bounded build, not unmetered use and not an override of a zero-budget period. When both Flash and Luna genuinely fit and pass every gate, assignments alternate via a durable identity-keyed state. Resume returns the prior assignment instead of consuming another slot. Every decision records context evidence, exclusions, intended and actual model/provider, reason, attempts, reassignments, and verified outcome; constrained selections are reported as biased, not randomized.
 
 ## Provider failures and shared capacity
 
@@ -97,7 +98,7 @@ Token Mizer separates authentication and configuration failures from throttling:
 
 The bounded-RUG mode is opt-in per task and does not change Token Mizer's default workflow. It keeps work requiring five or fewer direct calls in the coordinator. A larger coherent task may use one constrained worker, followed by deterministic verification. One failed verification permits one Astra-diagnosed repair; a second failure blocks automatic implementation and preserves the checkpoint. Budget, authorization, provider, authentication, and environment blockers stop earlier without consuming the code-repair attempt.
 
-`scripts\bounded_rug.py` stores a versioned private task record atomically and enforces the `task → build → verify → repair → verify → accepted|blocked` bounds. A private registry under `$COPILOT_HOME\token-mizer\task-registry.json` binds each task ID to one canonical record path, with `~\.copilot` as the fallback when `COPILOT_HOME` is unset. Registry-first file locking makes revision checks atomic across resumptions. Use the global `--registry` option to select another private registry for isolated automation or tests. It rejects stale record revisions, replayed events, counter resets, duplicate task identities, invalid transitions, and acceptance without evidence bound to the exact verified revision and environment. Scope completeness is a separate durable attestation that defaults to `unknown`; terminal state never makes it complete. The helper validates annotation structure, not whether an evidence reference is true. Keep records and registry files outside the repository and never put credentials, policy values, prompts, or full logs in them.
+`scripts\bounded_rug.py` stores a versioned private task record atomically and enforces the `task → build → verify → repair → verify → accepted|blocked` bounds. `scripts\model_assignment.py` stores identity-keyed assignments atomically, applies context fit before alternation, and records actual outcomes without consuming a new slot on resume. A private registry under `$COPILOT_HOME\token-mizer\task-registry.json` binds each task ID to one canonical record path, with `~\.copilot` as the fallback when `COPILOT_HOME` is unset. Registry-first file locking makes revision checks atomic across resumptions. Use the global `--registry` option to select another private registry for isolated automation or tests. It rejects stale record revisions, replayed events, counter resets, duplicate task identities, invalid transitions, and acceptance without evidence bound to the exact verified revision and environment. Scope completeness is a separate durable attestation that defaults to `unknown`; terminal state never makes it complete. The helper validates annotation structure, not whether an evidence reference is true. Keep records and registry files outside the repository and never put credentials, policy values, prompts, or full logs in them.
 
 A practical successful CI-boundary run is:
 
@@ -168,7 +169,7 @@ Then start a fresh session and run `/agent` in Copilot CLI.
 Expected results:
 
 - `plugin list` shows one enabled `token-mizer` entry.
-- Marketplace browse shows `token-mizer` version `1.0.0` or newer.
+- Marketplace browse shows `token-mizer` version `1.6.0` or newer.
 - `/agent` lists **Token Mizer**.
 
 If CLI discovery succeeds but the desktop App picker still does not show the agent, restart the App and open a new session. Plugin agents depend on host support and cache refresh behavior. Report the App version, CLI version, `copilot plugin list --json` output, and whether `/agent` sees Token Mizer. Do not treat successful installation alone as proof that a particular App build renders the agent.
@@ -189,10 +190,12 @@ plugin.json                          Agent Plugins 1.0 manifest
 com.github.copilot/agents/           Copilot-specific agent profile
 skills/                              Portable routing, bounded-RUG, handoff, budget, and reporting skills
 scripts/bounded_rug.py                Atomic bounded task-state and ledger-export helper
-scripts/token_mizer_report.py         Read-only usage and throughput helper
+scripts/model_assignment.py           Durable context-first worker-pool assignment helper
+scripts/token_mizer_report.py        Read-only usage and throughput helper
 tests/test_bounded_rug.py             Bounded transition, persistence, CLI, and reporting tests
 tests/test_token_mizer_report.py      Synthetic reporting fixture tests
 tests/test_routing_policy.py          Synthetic routing-policy invariants
+tests/test_model_assignment.py        Context-fit, alternation, resume, and explicit-Sol tests
 examples/policy.example.json         Safe, zero-budget local policy template
 examples/task-ledger.example.json     Synthetic task annotation template
 ```

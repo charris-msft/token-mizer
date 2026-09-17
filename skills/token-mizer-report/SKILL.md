@@ -119,7 +119,8 @@ Offer the default unclassified mode when provider comparison is unnecessary or h
 
 For an effectiveness report, supplement throughput with time-bounded structured session and tool evidence. Keep policy eligibility separate from observed behavior and report:
 
-- tasks and route distribution across Astra coordination, proactive Gemini 3.8 Flash builders, Foundry Sol fallback, Luna bounded non-build work, and separate capacity fallback;
+- tasks and route distribution across Astra coordination, proactive Gemini 3.8 Flash builders, Foundry Luna fallback, explicit-only Sol overrides, and separate capacity fallback;
+- context-fit evidence: estimated need, host-reported capacity, unknown/insufficient exclusions, coordinator suitability, and whether a large-context task was blocked rather than sent to Luna;
 - completion and failure proxies, separating authentication/environment, throttling/capacity, tool, test, and reasoning failures;
 - median and p90 duration when timestamps are reliable;
 - input, output, cache, retry, and duplicate-worker evidence when available;

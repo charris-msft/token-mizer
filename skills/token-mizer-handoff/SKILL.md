@@ -12,7 +12,8 @@ Apply only while Token Mizer is selected or explicitly activated. Use `token-miz
 - Keep work requiring five or fewer direct calls in the current session.
 - Delegate a self-contained objective, not an open-ended exploration.
 - Reuse a suitable worker and its checkpoints for follow-ups.
-- Prefer one bounded Gemini builder for substantial implementation only when `token-mizer-budget` authorizes the maximum commitment. Otherwise use Foundry Sol.
+- Estimate the complete context before spawning. Prefer one bounded Gemini builder for substantial implementation only when host capacity is confirmed and `token-mizer-budget` authorizes the maximum commitment. Otherwise use Foundry Luna when the task fits; never use Sol unless explicitly selected.
+- For a large-context task, denied or unknown GitHub capacity blocks rather than silently choosing a small-context Foundry worker. Offer only a lossless bounded decomposition when correctness is preserved.
 - Allow only one active worker per constrained Foundry connection when throttling or shared-capacity contention is suspected. Do not launch a Sol, Astra, or Luna replacement on the same connection as a workaround unless the host proves capacity is independent.
 - Preserve required specialist agents, skills, permissions, and approvals.
 - Never create an unrelated repository session merely to test routing.
