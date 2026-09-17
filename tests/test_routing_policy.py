@@ -24,7 +24,7 @@ class RoutingPolicyTests(unittest.TestCase):
     def test_release_versions_match(self):
         plugin = json.loads(read(PLUGIN))
         marketplace = json.loads(read(MARKETPLACE))
-        self.assertEqual("1.3.0", plugin["version"])
+        self.assertEqual("1.4.0", plugin["version"])
         self.assertEqual(plugin["version"], marketplace["metadata"]["version"])
         self.assertEqual(plugin["version"], marketplace["plugins"][0]["version"])
 

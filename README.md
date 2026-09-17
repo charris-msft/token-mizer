@@ -93,40 +93,39 @@ Token Mizer separates authentication and configuration failures from throttling:
 - After the bound, Token Mizer reports the blocker and waits for an explicit or genuinely scheduled resume. Five minutes makes capacity fallback eligible for evaluation, never automatically authorized.
 - Proactive Gemini builder selection is a separate route: a suitable bounded build can use it immediately when every paid gate passes. That does not remove the five-minute threshold from a separate capacity fallback.
 
-## Usage and throughput reports
+## Model and task efficiency reports
 
-While Token Mizer is selected, requests about token rates, TPM, tokens per second, model speed, usage, provider comparisons, or routing effectiveness automatically load `token-mizer-report`. Reporting remains opt-in through the selected agent and does not enable routing globally.
+While Token Mizer is selected, requests about token rates, latency, costs, task efficiency, model comparisons, provider comparisons, or routing effectiveness automatically load `token-mizer-report`. Reporting remains opt-in and does not enable routing globally.
 
-The skill starts with the local `assistant_usage_events` table instead of searching conversation summaries or response text. For repeatable exact-cutoff reports, use the bundled dependency-free helper:
+The bundled standard-library helper starts with read-only `assistant_usage_events` records instead of searching conversation text:
 
 ```powershell
 python scripts\token_mizer_report.py `
   --start 2026-09-01T00:00:00Z `
   --end 2026-09-08T00:00:00Z `
-  --model-like "%opus%"
+  --model-like "%opus%" `
+  --format json
 ```
 
-`--start` is inclusive and `--end` is exclusive. ISO timestamps with offsets are normalized to UTC; timezone-free SQLite timestamps are treated as UTC. The default database is `$COPILOT_HOME\session-store.db`, or `~/.copilot/session-store.db` when `COPILOT_HOME` is unset. Use `--format json` for structured output.
+`--start` is inclusive and `--end` is exclusive. Offset timestamps are normalized to UTC; timezone-free SQLite timestamps are treated as UTC. The default database is `$COPILOT_HOME\session-store.db`, or `~/.copilot/session-store.db` when unset.
 
-The default cohort is qualifying productive main-agent API records: `agent_id IS NULL`, non-null API endpoint, positive output tokens, and positive duration. Reports always distinguish:
+The main-agent rate cohort requires a non-null endpoint, positive output, and positive duration. It reports arithmetic and pooled output TPM, output tokens/second, request-duration mean/median/p90, output size, sessions, observed dates, reasoning settings, timing-field coverage, output-length strata, and exclusions. Request duration is not pure decode speed or task completion time. Compare matched task classes, dates, context, settings, reasoning, and output sizes; historical differences are correlation, not proof that one model caused the result.
 
-- **Mean per-call output TPM:** average of each call's `60000 × output_tokens ÷ duration_ms`.
-- **Pooled overall output TPM:** `60000 × total output tokens ÷ total duration`.
+Recorded cost uses a separate endpoint-present leaf-call cohort that includes zero-output calls. Missing `total_nano_aiu` stays unknown: an all-unknown cohort reports `null`, while partial coverage is labeled as an observed subtotal. One billion nano-AIU equals one AI credit, and [GitHub documents](https://docs.github.com/en/copilot/reference/copilot-billing/models-and-pricing) one AI credit as a `$0.01 USD` equivalent. The helper labels this as ledger evidence, not an invoice, Foundry price, or policy balance. It never multiplies by request multipliers or double-counts cache/reasoning tokens. When token pricing details exist, exact rational reconciliation reports absent, malformed, incomplete, partial, unpriced, matched, and mismatched coverage; a valid line beside an invalid line is never called fully reconciled.
 
-These per-call output rates are separate from deployment wall-clock TPM, which aggregates input plus output across concurrent requests in each real minute, and from quota-enforcement estimates or remaining-token headers. Azure Monitor `TokenTransaction`, `ProcessedPromptTokens`, and `GeneratedTokens` at `PT1M`, filtered by `ModelDeploymentName`, can measure aggregate peaks when explicitly requested without an LLM call. Quota estimates can include output caps and differ from recorded or billed tokens; monitor metrics do not prove the exact throttle calculation. Reports include calls, sessions, window, source, and exclusions. They do not infer billing from multipliers or claim controlled provider causality across different workloads.
+For task-level analysis, copy the synthetic `examples\task-ledger.example.json`, annotate explicit task and session/time ownership windows, then add:
 
-Provider attribution is off by default. Add `--provider-attribution metadata` only when needed. It reads only model-selection metadata for the SQL-selected session IDs. Treating `created_at` as request completion, it requires the latest selection at request start to match the usage model and labels in-request changes, malformed metadata, or missing evidence `unknown`. It resolves provider names from read-only `data.db`, never treats an API endpoint as provider proof, and never scans all histories recursively.
-
-Routing-effectiveness reports retain the broader evidence checks: Astra coordination, proactive Gemini builders, Sol fallback, Luna bounded work, separate capacity fallback, outcome and failure classes, latency, retries, duplicate workers, paid-route eligibility versus approval versus attempted route versus observed use, first-fix success, and post-failure Astra escalation. Authentication/environment failures stay separate from throttling or quota evidence. Reports do not claim Gemini is faster, cheaper, or better from preference or uncontrolled samples.
-
-The helper opens SQLite in read-only URI mode, introspects required columns, uses parameterized SQL, widens only its coarse date candidate range for timezone offsets, and then applies exact inclusive-start/exclusive-end UTC filtering. It performs no uploads, installs, database writes, policy writes, or LLM calls. Missing databases or fields produce an honest `UNAVAILABLE` result.
-
-Synthetic output example:
-
-```text
-Model | Provider | Calls | Sessions | Mean per-call output TPM | Pooled overall output TPM
-synthetic-opus | not requested | 12 | 4 | 3600.0 | 4100.0
+```powershell
+  --task-ledger examples\task-ledger.example.json
 ```
+
+The ledger distinguishes CI-passed, merged, deployed-but-not-live-verified, deployed-and-live-verified, failed, blocked, and unfinished outcomes. Set one `acceptance_boundaries` entry per comparable task type; for example, deployment can require `deployed-and-live-verified`. Milestones do not imply one another: merged does not prove CI passed, and deployed does not prove merge or live verification. The selected boundary counts only when it is the explicit outcome or appears in `observed_milestones`; otherwise acceptance remains unknown while the attempt cost remains included. Heterogeneous task types are not collapsed into one efficiency ranking. Optional `acceptance_applicable: false` excludes unrelated tasks from that type's numerator and denominator. Multiple workers and mixed models remain separate in each task. The report separates annotated elapsed time, summed inference resource time, and unioned request-active wall time. Task scopes must fit inside the annotated task window, and overlapping ownership is rejected. Credits per accepted task includes all applicable attempt costs and is withheld unless the boundary is explicit, scopes are complete, and every owned leaf call has known recorded cost. Evidence references and outcomes remain user-supplied annotations, not independently verified facts.
+
+Provider attribution is off by default. `--provider-attribution metadata` reads only selected sessions' model-selection metadata, rejects stale or in-request model switches, and labels missing evidence unknown. It never infers provider from API endpoint.
+
+Routing-effectiveness reports retain Astra/Gemini/Sol/Luna route evidence, failure classes, retries, duplicate workers, paid eligibility versus actual use, first-fix rate, and post-failure escalation. Authentication failures remain separate from capacity evidence. Task KPI priority is request-to-verified-live outcome, with model/tool time separate, p50/p90, all-attempt credits per accepted task, first-pass gate rate, and matured reopened/rollback rates. Every comparison must state its analysis version, cutoff, and evidence coverage.
+
+The helper uses read-only SQLite URI mode, schema introspection, parameterized SQL, exact UTC filtering, and no uploads, installs, writes, collection hooks, scheduled jobs, policy changes, or LLM calls. Missing data produces `UNAVAILABLE`, not guessed metrics.
 
 ## If Token Mizer is missing from the agent picker
 
@@ -168,6 +167,7 @@ scripts/token_mizer_report.py         Read-only usage and throughput helper
 tests/test_token_mizer_report.py      Synthetic reporting fixture tests
 tests/test_routing_policy.py          Synthetic routing-policy invariants
 examples/policy.example.json         Safe, zero-budget local policy template
+examples/task-ledger.example.json     Synthetic task annotation template
 ```
 
 ## Privacy and security

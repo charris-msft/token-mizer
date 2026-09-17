@@ -1,0 +1,49 @@
+{
+  "schema_version": "1.0",
+  "analysis_id": "synthetic-release-comparison-v1",
+  "cutoff": "2026-01-08T00:00:00Z",
+  "acceptance_boundaries": {
+    "deployment": "deployed-and-live-verified"
+  },
+  "tasks": [
+    {
+      "id": "synthetic-deploy-001",
+      "label": "Synthetic service deployment",
+      "type": "deployment",
+      "start": "2026-01-07T10:00:00Z",
+      "end": "2026-01-07T10:30:00Z",
+      "outcome": "deployed-and-live-verified",
+      "observed_milestones": [
+        "ci-passed",
+        "merged",
+        "deployed",
+        "deployed-and-live-verified"
+      ],
+      "scope_complete": true,
+      "first_pass_gates": true,
+      "followup_matured": true,
+      "reopened": false,
+      "rolled_back": false,
+      "evidence": [
+        {
+          "kind": "synthetic-deployment-check",
+          "ref": "example-only"
+        }
+      ],
+      "scopes": [
+        {
+          "session_id": "synthetic-coordinator-session",
+          "role": "coordinator",
+          "start": "2026-01-07T10:00:00Z",
+          "end": "2026-01-07T10:30:00Z"
+        },
+        {
+          "session_id": "synthetic-builder-session",
+          "role": "builder",
+          "start": "2026-01-07T10:05:00Z",
+          "end": "2026-01-07T10:25:00Z"
+        }
+      ]
+    }
+  ]
+}
