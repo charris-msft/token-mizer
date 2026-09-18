@@ -146,6 +146,16 @@ def select_assignment(state_path: str|Path, *, assignment_id:str, task_id:str, t
 
 def admit_assignment(state_path: str|Path, **kwargs): kwargs['path']=kwargs.get('path','coordinator'); return select_assignment(state_path,**kwargs)
 
+def spawn_handoff(state_path: str | Path, assignment_id: str, *, task_id: str, handoff_id: str, timestamp: str | None = None) -> dict[str, Any]:
+    """Create a compact handoff preserving the admitted qualified runtime identity."""
+    aid = _text(assignment_id, "assignment id"); tid = _text(task_id, "task id"); hid = _text(handoff_id, "handoff id"); at = _timestamp(timestamp)
+    file = Path(state_path).expanduser().resolve()
+    with _lock(file):
+        state = _load(file); assignment = state["assignments"].get(aid)
+        if not assignment or assignment["task_id"] != tid: raise AssignmentBlocked("handoff task identity mismatch")
+        handoff = {"handoff_id": hid, "assignment_id": aid, "task_id": tid, "provider": assignment["selected_provider"], "runtime_id": assignment["selected_runtime_id"], "family": assignment["selected_family"], "at": at}
+        _event(state, "spawn-handoff", aid, at, handoff_id=hid, runtime_id=handoff["runtime_id"]); _atomic(file, state); return handoff
+
 def record_outcome(state_path: str|Path, assignment_id:str, *, outcome:Any, actual_provider:str|None=None, actual_runtime_id:str|None=None, actual_model:str|None=None, attempts:int=1, reassignments:int=0, timestamp:str|None=None, evidence:list[str]|None=None, cutoff:str|None=None, task_id:str|None=None, delta:bool=False, cumulative:bool=False):
     aid=_text(assignment_id,'assignment id'); outcome=_text(outcome,'outcome'); at=_timestamp(timestamp); cutoff and _timestamp(cutoff)
     if isinstance(attempts,bool) or not isinstance(attempts,int) or attempts<0 or isinstance(reassignments,bool) or not isinstance(reassignments,int) or reassignments<0: raise ValueError('attempts and reassignments must be strict nonnegative integers')
@@ -175,8 +185,8 @@ def export_state(state_path: str|Path, cutoff: str|None=None):
 
 def _input(a): return json.loads(a.file.read_text(encoding='utf-8')) if a.file else json.loads(sys.stdin.read() or '{}')
 def main(argv=None):
-    p=argparse.ArgumentParser(description=__doc__); p.add_argument('action',choices=['select','admit','record','export']); p.add_argument('--state',type=Path,default=Path(os.environ.get('COPILOT_HOME',Path.home()/'.copilot'))/'token-mizer'/'model-assignments.json'); p.add_argument('--file',type=Path); a=p.parse_args(argv)
+    p=argparse.ArgumentParser(description=__doc__); p.add_argument('action',choices=['select','admit','spawn','record','export']); p.add_argument('--state',type=Path,default=Path(os.environ.get('COPILOT_HOME',Path.home()/'.copilot'))/'token-mizer'/'model-assignments.json'); p.add_argument('--file',type=Path); a=p.parse_args(argv)
     try:
-        d=_input(a); result=select_assignment(a.state,**d) if a.action in {'select','admit'} else record_outcome(a.state,**d) if a.action=='record' else export_state(a.state,**d); print(json.dumps(result,indent=2,sort_keys=True)); return 0
+        d=_input(a); result=select_assignment(a.state,**d) if a.action in {'select','admit'} else spawn_handoff(a.state,**d) if a.action=='spawn' else record_outcome(a.state,**d) if a.action=='record' else export_state(a.state,**d); print(json.dumps(result,indent=2,sort_keys=True)); return 0
     except (AssignmentBlocked,ValueError,OSError,json.JSONDecodeError) as e: print(json.dumps({'error':type(e).__name__,'message':str(e)}),file=sys.stderr); return 2
 if __name__=='__main__': raise SystemExit(main())
