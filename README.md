@@ -123,7 +123,20 @@ Use `add-scope` and `observe-model` to record every coordinator, builder, review
 
 ## Assignment and evidence contract
 
-Operational assignment JSON is fail-closed: every candidate has a distinct `role`, a `family` (`flash`, `luna`, or explicit-only `sol`), a provider-corresponding qualified `runtime_id` such as `Foundry/gpt-5.6-luna`, and `route_evidence` with `source` `host` or `local`, `verified: true`, and the same runtime ID. Bare model names, unverified or spoofed routes, provider/family mismatches, real provider GUIDs, and duplicate pool roles are rejected. Qualified IDs are preserved internally and exports contain no real GUIDs. Resume binds task ID, class, acceptance boundary, context, and large-context status; changed explicit model/provider requests are rejected. The ordinary path is `select -> admit -> spawn handoff -> record -> export`.
+Operational assignment JSON is fail-closed: every candidate has a distinct `role`, a `family` (`flash`, `luna`, or explicit-only `sol`), a provider-corresponding `runtime_id`, and structurally bound `route_evidence` with `source` `host` or `local` and `verified: true`. GitHub accepts the bare host runtime `gemini-3.8-flash`; Foundry requires a connection-qualified synthetic/local/catalog runtime such as `Foundry/gpt-5.6-luna`. Bare Foundry IDs, unverified or spoofed routes, provider/family mismatches, real provider GUIDs, and duplicate pool roles are rejected. Allocation preserves immutable task/context/role/provider/runtime identity; `admit` immediately revalidates current availability, authorization, context, and exact identity before `spawn` receives `selected_runtime_id`. Context growth or changed explicit identity blocks with a checkpoint; it never rerolls. The ordinary path is `select -> admit -> spawn handoff -> record -> export`. The helper validates annotation structure and binding only; it does not independently discover host truth or enforce budget.
+
+Regression mapping (synthetic IDs only):
+
+| Contract reproduction | Named regression |
+|---|---|
+| Large context excludes every Foundry route | `test_large_context_excludes_foundry_on_direct_coordinator_and_astra_paths` |
+| Denied or changed-task resume blocks | `test_resume_revalidates_current_admission_and_identity` |
+| Qualified Foundry and bare GitHub accepted; bare Foundry/spoof rejected | `test_runtime_identity_provider_family_matrix` |
+| Changed explicit identity and duplicate roles block | `test_explicit_runtime_conflict_and_duplicate_roles` |
+| Cutoff assignment/event/RUG leakage is excluded | `test_cutoff_exports_only_historical_assignment_evidence` |
+| Strict counters and exact event replay | `test_cumulative_counter_and_idempotent_replay_contract` |
+| Public CLI select/admit/record/export plus RUG attach/export | `test_public_cli_full_contract` |
+| Concurrent distinct IDs alternate; same ID reuses without a slot | `test_concurrent_distinct_and_same_identity_slots` |
 
 Synthetic example (safe to publish):
 ```json

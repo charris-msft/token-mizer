@@ -688,12 +688,14 @@ def record_followup(
     return updated
 
 
-def attach_rug(record: dict[str, Any], attachment_id: str, kind: str, ref: str, at: str | None = None, expected_record_revision: int | None = None) -> dict[str, Any]:
+def attach_rug(record: dict[str, Any], attachment_id: str, kind: str, ref: str, at: str | None = None, expected_record_revision: int | None = None, task_id: str | None = None, cutoff: str | None = None) -> dict[str, Any]:
     validate_record(record)
     if expected_record_revision is not None and expected_record_revision != record["record_revision"]: raise RecordError("stale record revision")
+    if task_id is not None and require_text(task_id, "task id") != record["task"]["id"]: raise RecordError("RUG task binding mismatch")
     timestamp = at or utc_now(); parse_time(timestamp); aid = require_text(attachment_id, "attachment id")
+    attachment_cutoff = parse_time(cutoff).isoformat() if cutoff is not None else None
     if any(x.get("attachment_id") == aid for x in record.get("rug_attachments", [])): raise RecordError("duplicate RUG attachment")
-    updated = deepcopy(record); updated.setdefault("rug_attachments", []).append({"attachment_id": aid, "kind": require_text(kind, "attachment kind"), "ref": require_text(ref, "attachment ref"), "at": timestamp}); updated["record_revision"] += 1; validate_record(updated); return updated
+    updated = deepcopy(record); updated.setdefault("rug_attachments", []).append({"attachment_id": aid, "kind": require_text(kind, "attachment kind"), "ref": require_text(ref, "attachment ref"), "task_id": record["task"]["id"], "at": timestamp, "cutoff": attachment_cutoff}); updated["record_revision"] += 1; validate_record(updated); return updated
 
 
 def parse_optional_bool(value: str) -> bool | None:
@@ -752,7 +754,7 @@ def export_ledger(record: dict[str, Any], analysis_id: str, cutoff: str) -> dict
             "verifications": record["counts"]["verifications"],
             "provider_model_observations": [o for o in record["provider_model_observations"] if parse_time(o["at"]) < cutoff_time],
             "rug_attachments": attachments,
-            "model_assignments": record.get("model_assignments", []),
+            "model_assignments": [m for m in record.get("model_assignments", []) if isinstance(m, dict) and m.get("at") and parse_time(m["at"]) < cutoff_time],
             "scope_status": scope_status,
             "verified_target": {
                 "revision": accepted_event.get("target_revision"),
@@ -844,7 +846,7 @@ def build_parser() -> argparse.ArgumentParser:
     observe.add_argument("--expected-record-revision", type=int, required=True)
 
     rug = subparsers.add_parser("attach-rug")
-    rug.add_argument("--file", type=Path, required=True); rug.add_argument("--attachment-id", required=True); rug.add_argument("--kind", required=True); rug.add_argument("--ref", required=True); rug.add_argument("--at"); rug.add_argument("--expected-record-revision", type=int, required=True)
+    rug.add_argument("--file", type=Path, required=True); rug.add_argument("--task-id", required=True); rug.add_argument("--attachment-id", required=True); rug.add_argument("--kind", required=True); rug.add_argument("--ref", required=True); rug.add_argument("--cutoff"); rug.add_argument("--at"); rug.add_argument("--expected-record-revision", type=int, required=True)
 
     followup = subparsers.add_parser("record-followup")
     followup.add_argument("--file", type=Path, required=True)
@@ -926,7 +928,7 @@ def main(argv: list[str] | None = None) -> int:
                         )
                         atomic_write(record_path, record)
                     elif args.command == "attach-rug":
-                        record = attach_rug(record, args.attachment_id, args.kind, args.ref, args.at, args.expected_record_revision)
+                        record = attach_rug(record, args.attachment_id, args.kind, args.ref, args.at, args.expected_record_revision, args.task_id, args.cutoff)
                         atomic_write(record_path, record)
                     elif args.command == "record-followup":
                         record = record_followup(

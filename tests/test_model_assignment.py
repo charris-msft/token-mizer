@@ -16,18 +16,14 @@ class ModelAssignmentTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.state = Path(self.temp.name) / "assignments.json"
         self.flash = {
-            "provider": "GitHub",
-            "model": POLICY.FLASH_MODEL,
-            "available": True,
-            "authorized": True,
-            "context_capacity": 100,
+            "role": "builder", "family": "flash", "provider": "GitHub",
+            "runtime_id": POLICY.FLASH_MODEL, "available": True, "authorized": True,
+            "context_capacity": 100, "route_evidence": {"source": "host", "verified": True, "provider": "GitHub", "family": "flash", "runtime_id": POLICY.FLASH_MODEL},
         }
         self.luna = {
-            "provider": "Foundry",
-            "model": POLICY.LUNA_MODEL,
-            "available": True,
-            "authorized": True,
-            "context_capacity": 100,
+            "role": "reviewer", "family": "luna", "provider": "Foundry",
+            "runtime_id": "synthetic-connection/" + POLICY.LUNA_MODEL, "available": True, "authorized": True,
+            "context_capacity": 100, "route_evidence": {"source": "local", "verified": True, "provider": "Foundry", "family": "luna", "runtime_id": "synthetic-connection/" + POLICY.LUNA_MODEL},
         }
 
     def tearDown(self):
@@ -72,15 +68,17 @@ class ModelAssignmentTests(unittest.TestCase):
 
     def test_sol_is_explicit_only(self):
         sol = {
+            "role": "validator", "family": "sol",
             "provider": "Foundry",
-            "model": POLICY.SOL_MODEL,
+            "runtime_id": "synthetic-connection/" + POLICY.SOL_MODEL,
             "available": True,
             "authorized": True,
             "context_capacity": 100,
+            "route_evidence": {"source": "local", "verified": True, "provider": "Foundry", "family": "sol", "runtime_id": "synthetic-connection/" + POLICY.SOL_MODEL},
         }
         with self.assertRaises(POLICY.AssignmentBlocked):
             self.choose("sol-auto", candidates=[sol])
-        selected = self.choose("sol-explicit", candidates=[sol], explicit_model=POLICY.SOL_MODEL)
+        selected = self.choose("sol-explicit", candidates=[sol], explicit_model="synthetic-connection/" + POLICY.SOL_MODEL)
         self.assertEqual(POLICY.SOL_MODEL, selected["selected_model"])
         self.assertEqual("explicit-user-model", selected["selection_reason"])
 
@@ -94,6 +92,7 @@ class ModelAssignmentTests(unittest.TestCase):
             actual_model=POLICY.FLASH_MODEL,
             attempts=1,
             reassignments=0,
+            cumulative=True,
             evidence=["ci:run-1"],
         )
         self.assertEqual("blocked", observed["outcome"])
@@ -111,7 +110,7 @@ class ModelAssignmentTests(unittest.TestCase):
         self.assertEqual("reuse-blocked", persisted["events"][-1]["type"])
 
     def test_routes_are_validated_and_large_context_excludes_foundry(self):
-        spoofed = dict(self.luna, model=POLICY.FLASH_MODEL)
+        spoofed = dict(self.luna, runtime_id=POLICY.FLASH_MODEL)
         with self.assertRaises(POLICY.AssignmentBlocked):
             self.choose("spoofed", candidates=[spoofed])
         with self.assertRaises(POLICY.AssignmentBlocked):
@@ -137,6 +136,42 @@ class ModelAssignmentTests(unittest.TestCase):
         self.assertEqual(0, result.returncode)
         self.assertEqual("cli-1", json.loads(result.stdout)["assignment_id"])
 
+
+    def test_large_context_excludes_foundry_on_direct_coordinator_and_astra_paths(self):
+        for path in ("direct", "coordinator", "astra"):
+            with self.assertRaises(POLICY.AssignmentBlocked):
+                self.choose("large-" + path, candidates=[self.luna], large_context=True, path=path)
+
+    def test_resume_revalidates_current_admission_and_identity(self):
+        self.choose("resume-1")
+        with self.assertRaises(POLICY.AssignmentBlocked):
+            self.choose("resume-1", candidates=[dict(self.flash, available=False), self.luna])
+        with self.assertRaises(POLICY.AssignmentBlocked):
+            POLICY.select_assignment(self.state, assignment_id="resume-1", task_id="task-1", task_class="code-change", acceptance_boundary="ci-passed", required_context=60, candidates=[self.flash, self.luna])
+
+    def test_runtime_identity_provider_family_matrix(self):
+        self.assertEqual(POLICY.FLASH_MODEL, self.choose("github-bare", candidates=[self.flash])["selected_runtime_id"])
+        self.assertTrue(self.choose("foundry-qualified", candidates=[self.luna])["selected_runtime_id"].endswith(POLICY.LUNA_MODEL))
+        with self.assertRaises(POLICY.AssignmentBlocked):
+            self.choose("foundry-bare", candidates=[dict(self.luna, runtime_id=POLICY.LUNA_MODEL)])
+        with self.assertRaises(POLICY.AssignmentBlocked):
+            self.choose("spoof-provider", candidates=[dict(self.flash, provider="Foundry")])
+
+    def test_explicit_runtime_conflict_and_duplicate_roles(self):
+        with self.assertRaises(POLICY.AssignmentBlocked):
+            self.choose("duplicate", candidates=[self.flash, dict(self.luna, role="builder")])
+        selected = self.choose("explicit-runtime", candidates=[self.luna], explicit_model=self.luna["runtime_id"])
+        with self.assertRaises(POLICY.AssignmentBlocked):
+            self.choose("explicit-runtime", candidates=[self.luna], explicit_model=POLICY.FLASH_MODEL)
+        self.assertTrue(selected["selected_runtime_id"].endswith(POLICY.LUNA_MODEL))
+
+    def test_cumulative_counter_and_idempotent_replay_contract(self):
+        selected = self.choose("measure-1")
+        first = POLICY.record_outcome(self.state, selected["assignment_id"], outcome="verified", attempts=1, reassignments=0, cumulative=True, event_id="measure-event", evidence=["ci:synthetic"], target_revision="sha", target_environment="synthetic")
+        replay = POLICY.record_outcome(self.state, selected["assignment_id"], outcome="verified", attempts=1, reassignments=0, cumulative=True, event_id="measure-event", evidence=["ci:synthetic"], target_revision="sha", target_environment="synthetic")
+        self.assertEqual(first["attempts"], replay["attempts"])
+        with self.assertRaises(POLICY.AssignmentBlocked):
+            POLICY.record_outcome(self.state, selected["assignment_id"], outcome="blocked", attempts=1, reassignments=0, cumulative=True, event_id="measure-event")
 
 if __name__ == "__main__":
     unittest.main()

@@ -37,7 +37,7 @@ No Terra route is configured. Preserve a provider-qualified ID that the host act
 8. After a failed first implementation or fix, use `provider.escalation_model` for a bounded rubber-duck diagnosis with the reproduction, evidence, and unresolved question. In the bounded-RUG pilot, that diagnosis may authorize the single repair attempt; a second failed verification blocks further automatic implementation.
 9. Delegate self-contained work using `token-mizer-handoff`. Prefer one worker and parallelize only independent work with measurable benefit.
 
-Record task identity/class/boundary, context-needed and capacity evidence, eligibility exclusions, intended and actual provider/model, selection reason, attempts, reassignments, and verified outcome. Do not claim randomized or fair comparison when context, authorization, or budget constrained selection.
+Keep `role`, `family`, `provider`, and `runtime_id` separate. GitHub may use the bare host runtime `gemini-3.8-flash` only with verified host/local metadata; Foundry runtime IDs must be connection-qualified. Allocate an immutable identity, then immediately before delegation admit by revalidating current availability, authorization, context, and exact role/provider/family/runtime. Pass `selected_runtime_id` to spawn. The helper validates annotations only; it does not discover host truth or enforce budget. Record task identity/class/boundary, context-needed and capacity evidence, eligibility exclusions, intended and actual provider/model/runtime, selection reason, attempts, reassignments, and verified outcome. Do not claim randomized or fair comparison when context, authorization, or budget constrained selection.
 
 ## Policy-gated paid routes
 

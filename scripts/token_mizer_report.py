@@ -1410,7 +1410,7 @@ def ingest_rug_ledger(path: Path, start: str, end: str) -> dict[str, Any]:
     try: data=json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error: raise ReportUnavailable(f"invalid RUG ledger: {error}") from error
     if not isinstance(data, dict) or not isinstance(data.get("tasks"), list): raise ReportUnavailable("RUG ledger requires tasks")
-    lo, hi=parse_timestamp(start), parse_timestamp(end); matched=[]
+    lo, hi=parse_timestamp(start), parse_timestamp(end); matched=[]; assignments=[]
     for task in data["tasks"]:
         if not isinstance(task, dict): continue
         rug=task.get("bounded_rug") or {}
@@ -1420,7 +1420,13 @@ def ingest_rug_ledger(path: Path, start: str, end: str) -> dict[str, Any]:
             except (TypeError, ValueError): continue
             if lo <= at < hi and item.get("provider") and item.get("model") and item.get("status"):
                 matched.append({"task_id":task.get("id"), **{k:item[k] for k in ("role","provider","model","status","at")}})
-    return {"source":"bounded-rug-ledger","window":{"start_inclusive":lo.isoformat(),"end_exclusive":hi.isoformat()},"matched_observations":matched,"matched_count":len(matched),"comparison_notice":"Only explicitly matched RUG evidence is reported; absent matches remain unknown."}
+        for item in rug.get("model_assignments", []):
+            if not isinstance(item, dict) or not item.get("at"): continue
+            try: at=parse_timestamp(item["at"])
+            except (TypeError, ValueError): continue
+            if lo <= at < hi and item.get("assignment_id") and item.get("selected_runtime_id"):
+                assignments.append({"task_id": task.get("id"), "assignment_id": item["assignment_id"], "selected_role": item.get("selected_role"), "selected_provider": item.get("selected_provider"), "selected_runtime_id": item["selected_runtime_id"], "evidence": item.get("route_evidence"), "at": at.isoformat()})
+    return {"source":"bounded-rug-ledger","window":{"start_inclusive":lo.isoformat(),"end_exclusive":hi.isoformat()},"matched_observations":matched,"matched_count":len(matched),"assignment_evidence":{"matched":assignments,"matched_count":len(assignments),"notice":"Observational assignment evidence only; no causal, authorization, budget, or savings claim."},"comparison_notice":"Only explicitly matched RUG evidence is reported; absent matches remain unknown."}
 
 
 def build_report(
