@@ -205,6 +205,7 @@ def new_record(
         "checks": [],
         "evidence": [],
         "provider_model_observations": [],
+        "rug_attachments": [],
         "model_assignments": [],
         "scope_attestation": {"status": "unknown", "at": None},
         "followup": {"matured": False, "reopened": None, "rolled_back": None, "observed_at": None},
@@ -396,6 +397,11 @@ def validate_record(record: Any) -> None:
     )
     if checks != expected_checks or evidence_items != expected_evidence or milestones != expected_milestones:
         raise RecordError("derived checks, evidence, or milestones do not match event history")
+    attachments = record.get("rug_attachments", [])
+    if not isinstance(attachments, list): raise RecordError("rug_attachments must be an array")
+    for attachment in attachments:
+        if not isinstance(attachment, dict): raise RecordError("invalid RUG attachment")
+        require_text(attachment.get("attachment_id"), "attachment id"); require_text(attachment.get("kind"), "attachment kind"); require_text(attachment.get("ref"), "attachment ref"); parse_time(attachment.get("at"))
     observations = record.get("provider_model_observations")
     if not isinstance(observations, list):
         raise RecordError("provider_model_observations must be an array")
@@ -682,6 +688,14 @@ def record_followup(
     return updated
 
 
+def attach_rug(record: dict[str, Any], attachment_id: str, kind: str, ref: str, at: str | None = None, expected_record_revision: int | None = None) -> dict[str, Any]:
+    validate_record(record)
+    if expected_record_revision is not None and expected_record_revision != record["record_revision"]: raise RecordError("stale record revision")
+    timestamp = at or utc_now(); parse_time(timestamp); aid = require_text(attachment_id, "attachment id")
+    if any(x.get("attachment_id") == aid for x in record.get("rug_attachments", [])): raise RecordError("duplicate RUG attachment")
+    updated = deepcopy(record); updated.setdefault("rug_attachments", []).append({"attachment_id": aid, "kind": require_text(kind, "attachment kind"), "ref": require_text(ref, "attachment ref"), "at": timestamp}); updated["record_revision"] += 1; validate_record(updated); return updated
+
+
 def parse_optional_bool(value: str) -> bool | None:
     return {"true": True, "false": False, "unknown": None}[value]
 
@@ -713,6 +727,7 @@ def export_ledger(record: dict[str, Any], analysis_id: str, cutoff: str) -> dict
         scope_attested_at = None
     if scope_status == "complete":
         validate_scope_windows(record)
+    attachments = [a for a in record.get("rug_attachments", []) if parse_time(a["at"]) < cutoff_time]
     task: dict[str, Any] = {
         "id": record["task"]["id"],
         "label": record["task"]["label"],
@@ -735,7 +750,8 @@ def export_ledger(record: dict[str, Any], analysis_id: str, cutoff: str) -> dict
             "build_attempts": record["counts"]["build_attempts"],
             "repair_attempts": record["counts"]["repair_attempts"],
             "verifications": record["counts"]["verifications"],
-            "provider_model_observations": record["provider_model_observations"],
+            "provider_model_observations": [o for o in record["provider_model_observations"] if parse_time(o["at"]) < cutoff_time],
+            "rug_attachments": attachments,
             "model_assignments": record.get("model_assignments", []),
             "scope_status": scope_status,
             "verified_target": {
@@ -827,6 +843,9 @@ def build_parser() -> argparse.ArgumentParser:
     observe.add_argument("--at")
     observe.add_argument("--expected-record-revision", type=int, required=True)
 
+    rug = subparsers.add_parser("attach-rug")
+    rug.add_argument("--file", type=Path, required=True); rug.add_argument("--attachment-id", required=True); rug.add_argument("--kind", required=True); rug.add_argument("--ref", required=True); rug.add_argument("--at"); rug.add_argument("--expected-record-revision", type=int, required=True)
+
     followup = subparsers.add_parser("record-followup")
     followup.add_argument("--file", type=Path, required=True)
     followup.add_argument("--reopened", choices=("true", "false", "unknown"), required=True)
@@ -905,6 +924,9 @@ def main(argv: list[str] | None = None) -> int:
                             record, args.role, args.provider, args.model,
                             args.status, args.at, args.expected_record_revision,
                         )
+                        atomic_write(record_path, record)
+                    elif args.command == "attach-rug":
+                        record = attach_rug(record, args.attachment_id, args.kind, args.ref, args.at, args.expected_record_revision)
                         atomic_write(record_path, record)
                     elif args.command == "record-followup":
                         record = record_followup(

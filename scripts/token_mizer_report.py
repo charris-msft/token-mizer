@@ -1405,6 +1405,24 @@ def aggregate(rows: list[dict[str, Any]], provider_mode: bool) -> list[dict[str,
     return results
 
 
+def ingest_rug_ledger(path: Path, start: str, end: str) -> dict[str, Any]:
+    """Ingest bounded-RUG export without inventing provider matches."""
+    try: data=json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error: raise ReportUnavailable(f"invalid RUG ledger: {error}") from error
+    if not isinstance(data, dict) or not isinstance(data.get("tasks"), list): raise ReportUnavailable("RUG ledger requires tasks")
+    lo, hi=parse_timestamp(start), parse_timestamp(end); matched=[]
+    for task in data["tasks"]:
+        if not isinstance(task, dict): continue
+        rug=task.get("bounded_rug") or {}
+        for item in rug.get("provider_model_observations", []):
+            if not isinstance(item, dict): continue
+            try: at=parse_timestamp(item.get("at"))
+            except (TypeError, ValueError): continue
+            if lo <= at < hi and item.get("provider") and item.get("model") and item.get("status"):
+                matched.append({"task_id":task.get("id"), **{k:item[k] for k in ("role","provider","model","status","at")}})
+    return {"source":"bounded-rug-ledger","window":{"start_inclusive":lo.isoformat(),"end_exclusive":hi.isoformat()},"matched_observations":matched,"matched_count":len(matched),"comparison_notice":"Only explicitly matched RUG evidence is reported; absent matches remain unknown."}
+
+
 def build_report(
     db_path: Path,
     start_text: str,
@@ -1531,6 +1549,7 @@ def main(argv: list[str] | None = None) -> int:
         help="optional versioned task annotation JSON for task-level accounting",
     )
     parser.add_argument("--format", choices=("table", "json"), default="table")
+    parser.add_argument("--rug-ledger", type=Path, help="optional bounded-RUG export for explicit evidence ingestion")
     args = parser.parse_args(argv)
 
     try:
@@ -1545,6 +1564,8 @@ def main(argv: list[str] | None = None) -> int:
         )
         if args.task_ledger:
             report["task_analysis"] = build_task_report(args.db, args.task_ledger)
+        if args.rug_ledger:
+            report["rug_ingestion"] = ingest_rug_ledger(args.rug_ledger, args.start, args.end)
     except ReportUnavailable as error:
         print(f"UNAVAILABLE: {error}", file=sys.stderr)
         return 2

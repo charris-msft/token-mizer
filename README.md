@@ -121,6 +121,16 @@ python scripts\token_mizer_report.py --start 2026-09-17T10:00:00Z --end 2026-09-
 
 Use `add-scope` and `observe-model` to record every coordinator, builder, reviewer, and validator scope plus provider/model observations. Use literal `unknown` values instead of inference. Run `attest-scope --status complete` only after confirming those scopes cover every participant and do not overlap; otherwise leave the default `unknown` or attest `partial`. Efficiency ratios remain suppressed without complete nonempty scope and metric coverage. After a terminal task has actually matured, `record-followup` can record observed reopen and rollback results; observations later than the report cutoff are excluded. Baseline tasks are observational entries in the existing v1.0 ledger, not executions through this bounded treatment helper. Pilot comparisons are separated by mode, task class, and acceptance boundary, count failed attempts, disclose cost and timing coverage, and avoid causal or savings claims. Synthetic runs demonstrate mechanics only; real-world pilot results are pending. Token Mizer never launches paid A/B benchmarks.
 
+## Assignment and evidence contract
+
+Operational assignment JSON is fail-closed: every candidate has a distinct `role`, a `family` (`flash`, `luna`, or explicit-only `sol`), a provider-corresponding qualified `runtime_id` such as `Foundry/gpt-5.6-luna`, and `route_evidence` with `source` `host` or `local`, `verified: true`, and the same runtime ID. Bare model names, unverified or spoofed routes, provider/family mismatches, real provider GUIDs, and duplicate pool roles are rejected. Qualified IDs are preserved internally and exports contain no real GUIDs. Resume binds task ID, class, acceptance boundary, context, and large-context status; changed explicit model/provider requests are rejected. The ordinary path is `select -> admit -> spawn handoff -> record -> export`.
+
+Synthetic example (safe to publish):
+```json
+{"role":"builder","family":"luna","provider":"Foundry","runtime_id":"Foundry/gpt-5.6-luna","route_evidence":{"source":"local","verified":true,"runtime_id":"Foundry/gpt-5.6-luna"}}
+```
+Operational examples must use the host-supplied qualified ID and verified evidence, never a connection GUID. Outcomes use strict non-boolean integer counters, append-only unique events, explicit `delta` or `cumulative` semantics, monotonic ISO instants, and `unknown` when evidence is absent. Bounded-RUG attachments are ingested with `bounded_rug.py attach-rug`; report ingestion only returns observations that explicitly match the report window.
+
 ## Model and task efficiency reports
 
 While Token Mizer is selected, requests about token rates, latency, costs, task efficiency, model comparisons, provider comparisons, or routing effectiveness automatically load `token-mizer-report`. Reporting remains opt-in and does not enable routing globally.
