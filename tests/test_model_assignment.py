@@ -117,6 +117,15 @@ class ModelAssignmentTests(unittest.TestCase):
         with self.assertRaises(POLICY.AssignmentBlocked):
             self.choose("large-foundry", candidates=[self.luna], large_context=True)
 
+    def test_concurrent_cli_selection_is_identity_stable(self):
+        import subprocess, sys
+        script = ROOT / "scripts" / "model_assignment.py"
+        request = {"assignment_id": "parallel-1", "task_id": "task-1", "task_class": "code-change", "acceptance_boundary": "ci-passed", "required_context": 50, "candidates": [self.flash, self.luna]}
+        processes = [subprocess.Popen([sys.executable, str(script), "--state", str(self.state), "select"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) for _ in range(2)]
+        outputs = [process.communicate(json.dumps(request), timeout=30) for process in processes]
+        self.assertTrue(all(process.returncode == 0 for process in processes), outputs)
+        self.assertEqual(json.loads(outputs[0][0])["selected_model"], json.loads(outputs[1][0])["selected_model"])
+
     def test_cli_help_and_json_contract(self):
         import subprocess, sys
         script = ROOT / "scripts" / "model_assignment.py"
