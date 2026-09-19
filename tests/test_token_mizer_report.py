@@ -45,6 +45,30 @@ class TokenMizerReportTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
+    def test_rug_assignment_evidence_matches_identity_and_cutoff(self):
+        assignment = {"assignment_id": "a", "task_id": "t", "task_class": "change", "acceptance_boundary": "ci-passed",
+                      "selected_runtime_id": "synthetic/gpt-5.6-luna", "selected_provider": "Foundry", "selected_role": "builder",
+                      "created_at": "2026-09-17T10:00:00Z", "at": "2026-09-17T10:01:00.100Z",
+                      "snapshot_cutoff": "2026-09-17T10:02:00Z", "attempts": None, "outcome": "unknown"}
+        path = self.root / "rug-ledger.json"
+        def ingest(updates, ledger_cutoff="2026-09-17T11:00:00Z"):
+            path.write_text(json.dumps({"cutoff": ledger_cutoff, "tasks": [{"id": "t", "type": "change", "bounded_rug": {
+                "acceptance_boundary": "ci-passed", "model_assignments": [{**assignment, **updates}]}}]}), encoding="utf-8")
+            return REPORT.ingest_rug_ledger(path, "2026-09-17T10:00:00Z", "2026-09-17T11:00:00Z")["assignment_evidence"]
+        matched = ingest({})
+        self.assertEqual(1, matched["matched_count"])
+        self.assertIsNone(matched["matched"][0]["attempts"])
+        for cutoff in (None, "invalid", "2026-09-17T10:01:00Z"):
+            self.assertEqual(0, ingest({}, ledger_cutoff=cutoff)["matched_count"])
+        for updates in ({"task_id": "other"}, {"task_class": "other"}, {"acceptance_boundary": "merged"},
+                        {"snapshot_cutoff": "2026-09-18T10:02:00Z"}, {"at": "2026-09-18T10:00:00Z"},
+                        {"snapshot_cutoff": "2026-09-17T10:01:00Z"}):
+            with self.subTest(updates=updates):
+                excluded = ingest(updates)
+                self.assertEqual(0, excluded["matched_count"])
+                self.assertEqual(1, excluded["excluded_count"])
+                self.assertIn("unknown", excluded["notice"])
+
     def add_usage(
         self,
         session_id="s1",

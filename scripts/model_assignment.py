@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fail-closed model allocation, admission, measurement, and JSON CLI."""
 from __future__ import annotations
-import argparse, json, os, re, sys, tempfile
+import argparse, json, os, sys, tempfile
 from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime, timezone
@@ -28,7 +28,7 @@ def _timestamp(v: Any = None) -> str:
     if d.tzinfo is None: raise ValueError("timestamp must include timezone")
     return d.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
-def _time(v: str): return datetime.fromisoformat(_timestamp(v).replace("Z", "+00:00"))
+def _time(v: str): return datetime.fromisoformat(_timestamp(_text(v, "timestamp")).replace("Z", "+00:00"))
 
 def _atomic(path: Path, value: dict[str, Any]):
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -60,20 +60,142 @@ def _lock(path: Path):
 
 def _new_state(): return {"schema_version": STATE_VERSION, "next_slot": 0, "assignments": {}, "events": [], "next_event_id": 1}
 
+ALLOCATION_FIELDS = (
+    "assignment_id", "task_id", "task_class", "acceptance_boundary", "required_context",
+    "large_context", "path", "explicit_model", "explicit_provider", "explicit_role",
+    "selection_reason", "selected_role", "selected_family", "selected_provider",
+    "selected_runtime_id", "selected_model", "route_evidence", "eligibility", "created_at",
+)
+
+
+def _counter(value):
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError("attempts and reassignments must be strict nonnegative integers")
+    return value
+
+
+def _outcome_payload(outcome, actual_provider, actual_runtime_id, actual_model, attempts,
+                     reassignments, evidence, semantics, target_revision, target_environment):
+    outcome = _text(outcome, "outcome")
+    if not isinstance(evidence, list) or any(not isinstance(x, str) or not x.strip() for x in evidence):
+        raise ValueError("evidence must be a list of nonempty strings")
+    for value, name in ((actual_provider, "actual provider"), (actual_runtime_id, "actual runtime"),
+                        (actual_model, "actual model"), (target_revision, "target revision"),
+                        (target_environment, "target environment")):
+        if value is not None: _text(value, name)
+    if semantics != "cumulative": raise ValueError("only cumulative counters are supported")
+    if actual_runtime_id not in {None, "unknown"} and actual_provider != "GitHub" and "/" not in actual_runtime_id:
+        raise AssignmentBlocked("actual Foundry runtime_id must be qualified")
+    verified = outcome.lower() in {"accepted", "verified", "passed", "success"} and bool(evidence) and target_revision not in {None, "unknown"} and target_environment not in {None, "unknown"}
+    return {"outcome": outcome, "actual_provider": actual_provider or "unknown",
+            "actual_runtime_id": actual_runtime_id or "unknown", "actual_model": actual_model or "unknown",
+            "attempts": None if attempts is None else _counter(attempts),
+            "reassignments": None if reassignments is None else _counter(reassignments),
+            "evidence": deepcopy(evidence), "semantics": semantics, "target_revision": target_revision,
+            "target_environment": target_environment, "verification": "verified" if verified else "unverified"}
+
+
+def _project(allocation, events):
+    result = {key: deepcopy(allocation[key]) for key in ALLOCATION_FIELDS}
+    result.update(attempts=None, reassignments=None, outcome="unknown", verification="unverified",
+                  actual_provider="unknown", actual_runtime_id="unknown", actual_model="unknown",
+                  evidence=[], target_revision=None, target_environment=None, admission_status="unknown")
+    for event in events:
+        if event["assignment_id"] != result["assignment_id"]: continue
+        result["at"] = event["at"]
+        if event["type"] == "outcome":
+            payload = _outcome_payload(*(event.get(k) for k in (
+                "outcome", "actual_provider", "actual_runtime_id", "actual_model", "attempts",
+                "reassignments", "evidence", "semantics", "target_revision", "target_environment")))
+            for key in ("attempts", "reassignments"):
+                if payload[key] is None:
+                    payload[key] = result[key]
+                elif result[key] is not None and payload[key] < result[key]:
+                    raise AssignmentBlocked("cumulative counters must be nondecreasing")
+            result.update(payload)
+        elif event["type"] == "admitted":
+            result.update(admission_status="admitted", admitted_at=event["at"], admission_evidence=deepcopy(event.get("evidence")))
+        elif event["type"] in {"admission-blocked", "reuse-blocked"}:
+            result.update(admission_status="blocked", admitted_at=None, admission_evidence=None)
+    return result
+
+
+def _validate_state(state):
+    if not isinstance(state, dict) or state.get("schema_version") != STATE_VERSION or not isinstance(state.get("assignments"), dict) or not isinstance(state.get("events"), list):
+        raise ValueError("invalid assignment state")
+    _counter(state.get("next_slot")); _counter(state.get("next_event_id"))
+    seen = set(); allocated = set(); previous = None
+    for aid, allocation in state["assignments"].items():
+        if not isinstance(allocation, dict) or any(k not in allocation for k in ALLOCATION_FIELDS) or allocation["assignment_id"] != aid:
+            raise ValueError("invalid allocation metadata")
+        _time(allocation["created_at"])
+        _request({key: allocation[key] for key in ("assignment_id", "task_id", "task_class", "acceptance_boundary", "required_context", "large_context", "path", "explicit_model", "explicit_provider", "explicit_role")} | {"candidates": allocation["eligibility"]})
+        for key in ("selected_role", "selected_family", "selected_provider", "selected_runtime_id", "selected_model", "selection_reason"):
+            _text(allocation[key], key)
+        route = _candidate({"role": allocation["selected_role"], "family": allocation["selected_family"],
+                            "provider": allocation["selected_provider"], "runtime_id": allocation["selected_runtime_id"],
+                            "route_evidence": allocation["route_evidence"]}, allocation["required_context"],
+                           allocation["explicit_model"], allocation["explicit_provider"], allocation["explicit_role"],
+                           allocation["large_context"], allocation["path"])
+        if allocation["selected_model"] != FAMILIES[route["family"]][1]: raise ValueError("invalid selected model")
+        if allocation["large_context"] and route["provider"] == "Foundry": raise ValueError("large-context excludes Foundry")
+        if route["family"] == "sol" and allocation["explicit_model"] != route["runtime_id"]: raise ValueError("Sol requires explicit runtime")
+        if allocation["explicit_model"] not in {None, route["runtime_id"]} or allocation["explicit_provider"] not in {None, route["provider"]}:
+            raise ValueError("selected route conflicts with explicit request")
+        normalized = []
+        for item in allocation["eligibility"]:
+            if not isinstance(item, dict) or not isinstance(item.get("eligible"), bool): raise ValueError("invalid eligibility")
+            normalized.append({**item, "available": item["eligible"], "authorized": item["eligible"]})
+        pool = _pool(normalized, allocation["required_context"], allocation["explicit_model"], allocation["explicit_provider"], allocation["explicit_role"], allocation["large_context"], allocation["path"])
+        selected = _match(allocation, pool)
+        if not selected or not selected["eligible"] or selected["route_evidence"] != allocation["route_evidence"]:
+            raise ValueError("selected route must match eligible allocation evidence")
+    for event in state["events"]:
+        if not isinstance(event, dict): raise ValueError("invalid event")
+        event_id = _text(event.get("event_id"), "event id")
+        if event_id in seen: raise ValueError("event_id collision")
+        current = _time(event.get("at"))
+        if previous is not None and current < previous: raise ValueError("event timestamps must be monotonic")
+        aid = event.get("assignment_id")
+        if aid not in state["assignments"]: raise ValueError("event requires registered assignment")
+        if event.get("type") == "allocated":
+            if aid in allocated or current != _time(state["assignments"][aid]["created_at"]): raise ValueError("invalid allocation event")
+            allocated.add(aid)
+        elif aid not in allocated or event.get("type") not in {"outcome", "admitted", "admission-blocked", "reuse-blocked"}:
+            raise ValueError("invalid assignment event")
+        allocation = state["assignments"][aid]
+        if event["type"] == "allocated" and event.get("identity") != {key: allocation[key] for key in ("task_id", "task_class", "acceptance_boundary", "required_context", "large_context")}:
+            raise ValueError("allocation event identity mismatch")
+        if event["type"] == "outcome":
+            payload = _outcome_payload(*(event.get(k) for k in (
+                "outcome", "actual_provider", "actual_runtime_id", "actual_model", "attempts",
+                "reassignments", "evidence", "semantics", "target_revision", "target_environment")))
+            if any(key not in event or event[key] != value for key, value in payload.items()):
+                raise ValueError("outcome event differs from validated evidence")
+        if event["type"] == "admitted":
+            if event.get("runtime_id") != allocation["selected_runtime_id"]: raise ValueError("admission runtime mismatch")
+            evidence = event.get("evidence")
+            if not isinstance(evidence, dict) or evidence.get("verified") is not True or evidence.get("source") not in {"host", "local"} or evidence.get("runtime_id") != allocation["selected_runtime_id"]:
+                raise ValueError("admission evidence required")
+        if event["type"] in {"admission-blocked", "reuse-blocked"}: _text(event.get("reason"), "block reason")
+        seen.add(event_id); previous = current
+    if allocated != set(state["assignments"]): raise ValueError("allocation event required")
+    for allocation in state["assignments"].values(): _project(allocation, state["events"])
+
+
+def _save(path, state):
+    _validate_state(state)
+    _atomic(path, state)
+
+
 def _load(path: Path):
     if not path.exists(): return _new_state()
-    try: d = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as e: raise ValueError(f"invalid assignment state: {e}")
-    if not isinstance(d, dict) or d.get("schema_version") != STATE_VERSION or not isinstance(d.get("assignments"), dict) or not isinstance(d.get("events"), list): raise ValueError("invalid assignment state")
-    seen = set(); previous = None
-    for event in d["events"]:
-        if not isinstance(event, dict) or not isinstance(event.get("event_id"), str): raise ValueError("invalid event")
-        if event["event_id"] in seen: raise ValueError("event_id collision")
-        stamp = event.get("at", event.get("timestamp")); current = _time(stamp) if stamp else None
-        if current is None: raise ValueError("event timestamp required")
-        if previous is not None and current < previous: raise ValueError("event timestamps must be monotonic")
-        seen.add(event["event_id"]); previous = current
-    return d
+    try: state = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e: raise ValueError(f"invalid assignment state: {e}") from e
+    _validate_state(state)
+    # Older v4 files may contain mutable snapshots. Never trust those fields.
+    state["assignments"] = {aid: {key: value[key] for key in ALLOCATION_FIELDS} for aid, value in state["assignments"].items()}
+    return state
 
 def _event(state: dict[str, Any], typ: str, aid: str, at: str, event_id: str | None = None, **extra):
     event_id = event_id or f"e-{state.get('next_event_id', 1)}"
@@ -86,12 +208,10 @@ def _event(state: dict[str, Any], typ: str, aid: str, at: str, event_id: str | N
 
 def _runtime(raw: dict[str, Any], provider: str, family: str, model: str) -> str:
     runtime = _text(raw.get("runtime_id"), "candidate runtime_id")
-    if provider == "GitHub":
-        if runtime != model: raise AssignmentBlocked("GitHub runtime_id must be the bare host runtime identity")
-    else:
-        if "/" not in runtime or runtime.startswith("/") or runtime.endswith("/") or "\\" in runtime: raise AssignmentBlocked("Foundry runtime_id must be connection-qualified")
+    if runtime != model or provider != "GitHub":
+        if "/" not in runtime or runtime.startswith("/") or runtime.endswith("/") or "\\" in runtime:
+            raise AssignmentBlocked("runtime_id must be connection-qualified (except bare GitHub runtime)")
         if not runtime.endswith("/" + model): raise AssignmentBlocked("runtime_id does not match model")
-    if any(x in runtime.lower() for x in ("guid", "provider_guid", "connection_id")) or re.fullmatch(r"[0-9a-f-]{32,}", runtime, re.I): raise AssignmentBlocked("real or spoofed provider identity is not publishable")
     return runtime
 
 def _candidate(raw: Any, required: int, explicit_model: str|None, explicit_provider: str|None, explicit_role: str|None, large: bool, path: str):
@@ -121,6 +241,8 @@ def _candidate(raw: Any, required: int, explicit_model: str|None, explicit_provi
 def _identity(a): return (a["task_id"], a["task_class"], a["acceptance_boundary"], a["required_context"], a["large_context"])
 
 def _request(kwargs):
+    allowed = {"assignment_id", "task_id", "task_class", "acceptance_boundary", "required_context", "candidates", "explicit_model", "explicit_provider", "explicit_role", "large_context", "path", "now"}
+    if set(kwargs) - allowed: raise ValueError("unknown request fields: " + ", ".join(sorted(set(kwargs) - allowed)))
     aid, tid, tc, ab = (_text(kwargs[k], k.replace("_", " ")) for k in ("assignment_id", "task_id", "task_class", "acceptance_boundary"))
     rc = kwargs.get("required_context")
     if not isinstance(rc, int) or isinstance(rc, bool) or rc <= 0: raise ValueError("required_context must be a positive estimate")
@@ -134,102 +256,147 @@ def _request(kwargs):
     if path not in {"direct", "coordinator", "astra"}: raise ValueError("invalid assignment path")
     return aid, tid, tc, ab, rc, candidates, explicit_model, explicit_provider, explicit_role, large, path
 
+def _pool(candidates, rc, em, ep, er, large, path):
+    items = [_candidate(c, rc, em, ep, er, large, path) for c in candidates]
+    routes = [(x["family"], x["provider"], x["runtime_id"]) for x in items]
+    if len(set(routes)) != len(routes): raise AssignmentBlocked("duplicate or conflicting pool routes are rejected")
+    if len({x["role"] for x in items}) != 1: raise AssignmentBlocked("pool candidates must perform the same task role")
+    return items
+
+
+def _resume_check(allocation, identity, em, ep, er, path):
+    if _identity(allocation) != identity or allocation["path"] != path:
+        raise AssignmentBlocked("assignment identity mismatch; checkpoint required")
+    for key, value in (("explicit_model", em), ("explicit_provider", ep), ("explicit_role", er)):
+        if value is not None and allocation.get(key) != value:
+            raise AssignmentBlocked("changed explicit request conflicts with immutable assignment")
+
+
+def _match(allocation, items):
+    return next((x for x in items if all(x[key] == allocation["selected_" + key]
+                for key in ("runtime_id", "role", "provider", "family"))), None)
+
+
 def select_assignment(state_path: str|Path, **kwargs):
-    aid, tid, tc, ab, rc, candidates, em, ep, er, large, path = _request(kwargs); at = _timestamp(kwargs.get("now")); file = Path(state_path).expanduser().resolve()
+    aid, tid, tc, ab, rc, candidates, em, ep, er, large, path = _request(kwargs)
+    file = Path(state_path).expanduser().resolve()
     with _lock(file):
-        state = _load(file); prior = state["assignments"].get(aid)
+        state = _load(file); at = _timestamp(kwargs.get("now")); prior = state["assignments"].get(aid)
         if prior:
-            if _identity(prior) != (tid, tc, ab, rc, large): raise AssignmentBlocked("assignment identity mismatch; checkpoint required")
-            if em is not None and prior.get("explicit_model") != em: raise AssignmentBlocked("changed explicit runtime conflict; checkpoint required")
-            if ep is not None and prior.get("explicit_provider") != ep: raise AssignmentBlocked("changed explicit provider conflict; checkpoint required")
-            current = [_candidate(c, rc, prior.get("explicit_model"), prior.get("explicit_provider"), prior.get("explicit_role"), large, path) for c in candidates]
-            match = next((x for x in current if x["runtime_id"] == prior["selected_runtime_id"] and x["role"] == prior["selected_role"] and x["provider"] == prior["selected_provider"] and x["family"] == prior["selected_family"]), None)
+            _resume_check(prior, (tid, tc, ab, rc, large), em, ep, er, path)
+            current = _pool(candidates, rc, prior["explicit_model"], prior["explicit_provider"], prior["explicit_role"], large, path)
+            match = _match(prior, current)
             if not match or not match["eligible"]:
-                _event(state, "reuse-blocked", aid, at, reason="current admission failed"); _atomic(file, state)
+                _event(state, "reuse-blocked", aid, at, reason="current admission failed"); _save(file, state)
                 raise AssignmentBlocked("resume blocked; historical assignment preserved")
-            return deepcopy(prior)
-        items = [_candidate(c, rc, em, ep, er, large, path) for c in candidates]
-        if len({x["role"] for x in items}) != len(items): raise AssignmentBlocked("duplicate or conflicting pool roles are rejected")
+            return _project(prior, state["events"])
+        items = _pool(candidates, rc, em, ep, er, large, path)
         eligible = [x for x in items if x["eligible"]]
         if not eligible:
             detail = "large-context-requires-GitHub" if large else "no authorized, available, verified model has confirmed sufficient context capacity"
             raise AssignmentBlocked(detail)
         if em is not None: chosen = next((x for x in eligible if x["runtime_id"] == em), None); reason = "explicit-user-model"
-        elif er is not None: chosen = next((x for x in eligible if x["role"] == er), None); reason = "explicit-role"
         else:
             flash = [x for x in eligible if x["family"] == "flash"]; luna = [x for x in eligible if x["family"] == "luna"]
             pool = flash + luna; chosen = pool[state.get("next_slot", 0) % len(pool)] if pool else None
             if flash and luna: state["next_slot"] += 1; reason = "alternating-context-fitting-pool"
             else: reason = "only-context-fitting-authorized-candidate"
         if not chosen: raise AssignmentBlocked("explicit runtime, role, or provider is unavailable, unauthorized, unverified, or does not fit")
-        result = {"assignment_id": aid, "task_id": tid, "task_class": tc, "acceptance_boundary": ab, "required_context": rc, "large_context": large, "path": path, "explicit_model": em, "explicit_provider": ep, "explicit_role": er, "selection_reason": reason, "selected_role": chosen["role"], "selected_family": chosen["family"], "selected_provider": chosen["provider"], "selected_runtime_id": chosen["runtime_id"], "selected_model": FAMILIES[chosen["family"]][1], "route_evidence": deepcopy(chosen["route_evidence"]), "eligibility": items, "admitted": False, "attempts": 0, "reassignments": 0, "outcome": "unknown", "created_at": at}
-        state["assignments"][aid] = result; _event(state, "allocated", aid, at, identity={"task_id": tid, "task_class": tc, "acceptance_boundary": ab, "required_context": rc, "large_context": large}); _atomic(file, state); return deepcopy(result)
+        result = {"assignment_id": aid, "task_id": tid, "task_class": tc, "acceptance_boundary": ab, "required_context": rc, "large_context": large, "path": path, "explicit_model": em, "explicit_provider": ep, "explicit_role": er, "selection_reason": reason, "selected_role": chosen["role"], "selected_family": chosen["family"], "selected_provider": chosen["provider"], "selected_runtime_id": chosen["runtime_id"], "selected_model": FAMILIES[chosen["family"]][1], "route_evidence": deepcopy(chosen["route_evidence"]), "eligibility": items, "created_at": at}
+        state["assignments"][aid] = result
+        _event(state, "allocated", aid, at, identity={"task_id": tid, "task_class": tc, "acceptance_boundary": ab, "required_context": rc, "large_context": large})
+        _save(file, state)
+        return _project(result, state["events"])
 
 def admit_assignment(state_path: str|Path, **kwargs):
-    aid, tid, tc, ab, rc, candidates, em, ep, er, large, path = _request(kwargs); at = _timestamp(kwargs.get("now")); file = Path(state_path).expanduser().resolve()
-    with _lock(file):
-        state = _load(file); a = state["assignments"].get(aid)
-        if not a: raise AssignmentBlocked("assignment must be allocated before admission")
-        if _identity(a) != (tid, tc, ab, rc, large): raise AssignmentBlocked("context growth or identity conflict blocks admission; checkpoint required")
-        for key, val in (("explicit_model", em), ("explicit_provider", ep), ("explicit_role", er)):
-            if val is not None and a.get(key) != val: raise AssignmentBlocked("changed explicit request conflicts with immutable assignment")
-        items = [_candidate(c, rc, a.get("explicit_model"), a.get("explicit_provider"), a.get("explicit_role"), large, path) for c in candidates]
-        match = next((x for x in items if x["runtime_id"] == a["selected_runtime_id"] and x["role"] == a["selected_role"] and x["provider"] == a["selected_provider"] and x["family"] == a["selected_family"]), None)
-        if not match or not match["eligible"]: _event(state, "admission-blocked", aid, at, reason="current availability/authorization/context or route mismatch"); _atomic(file, state); raise AssignmentBlocked("admission blocked; immutable allocation preserved")
-        a["admitted"] = True; a["admitted_at"] = at; a["admission_evidence"] = deepcopy(match["route_evidence"]); _event(state, "admitted", aid, at, runtime_id=a["selected_runtime_id"]); _atomic(file, state); return deepcopy(a)
-
-def spawn_handoff(state_path: str|Path, assignment_id: str, *, task_id: str, handoff_id: str, timestamp: str|None = None):
-    aid = _text(assignment_id, "assignment id"); tid = _text(task_id, "task id"); hid = _text(handoff_id, "handoff id"); at = _timestamp(timestamp); file = Path(state_path).expanduser().resolve()
-    with _lock(file):
-        state = _load(file); a = state["assignments"].get(aid)
-        if not a or a["task_id"] != tid or not a.get("admitted"): raise AssignmentBlocked("spawn requires admitted assignment and matching task")
-        h = {"handoff_id": hid, "assignment_id": aid, "task_id": tid, "provider": a["selected_provider"], "runtime_id": a["selected_runtime_id"], "family": a["selected_family"], "at": at}
-        _event(state, "spawn-handoff", aid, at, handoff_id=hid, runtime_id=h["runtime_id"]); _atomic(file, state); return h
-
-def _named_evidence(outcome: str, evidence: list[str], target_revision: str|None, target_environment: str|None):
-    return outcome.lower() in {"accepted", "verified", "passed", "success"} and bool(evidence) and all(e.strip() for e in evidence) and bool(target_revision) and bool(target_environment)
-
-def record_outcome(state_path: str|Path, assignment_id: str, *, outcome: Any, actual_provider: str|None=None, actual_runtime_id: str|None=None, actual_model: str|None=None, attempts: int=0, reassignments: int=0, timestamp: str|None=None, evidence: list[str]|None=None, cutoff: str|None=None, task_id: str|None=None, delta: bool=False, cumulative: bool=False, event_id: str|None=None, target_revision: str|None=None, target_environment: str|None=None):
-    aid = _text(assignment_id, "assignment id"); outcome = _text(outcome, "outcome"); at = _timestamp(timestamp); cutoff and _timestamp(cutoff)
-    if delta == cumulative: raise ValueError("exactly one of delta or cumulative must be true")
-    for v in (attempts, reassignments):
-        if isinstance(v, bool) or not isinstance(v, int) or v < 0: raise ValueError("attempts and reassignments must be strict nonnegative integers")
-    evidence = list(evidence or [])
-    if not all(isinstance(x, str) and x.strip() for x in evidence): raise ValueError("evidence must be a list of nonempty strings")
+    aid, tid, tc, ab, rc, candidates, em, ep, er, large, path = _request(kwargs)
     file = Path(state_path).expanduser().resolve()
     with _lock(file):
-        state = _load(file); selected = state["assignments"].get(aid)
-        if not selected: raise AssignmentBlocked("assignment identity is not registered")
-        if task_id and task_id != selected["task_id"]: raise AssignmentBlocked("outcome task identity mismatch")
-        if event_id:
-            prior = next((e for e in state["events"] if e.get("event_id") == event_id), None)
-            if prior:
-                comparable = {k: v for k, v in prior.items() if k != "at"}; incoming = {"event_id": event_id, "type": "outcome", "assignment_id": aid, "outcome": outcome, "actual_provider": actual_provider or "unknown", "actual_runtime_id": actual_runtime_id or "unknown", "actual_model": actual_model or "unknown", "attempts": attempts, "reassignments": reassignments, "evidence": evidence, "semantics": "delta" if delta else "cumulative", "target_revision": target_revision, "target_environment": target_environment, "verification": "verified" if _named_evidence(outcome, evidence, target_revision, target_environment) else "unverified"}
-                if {k: v for k, v in comparable.items() if k != "event_id"} == {k: v for k, v in incoming.items() if k != "event_id"}: return deepcopy(selected)
+        state = _load(file); at = _timestamp(kwargs.get("now")); allocation = state["assignments"].get(aid)
+        if not allocation: raise AssignmentBlocked("assignment must be allocated before admission")
+        _resume_check(allocation, (tid, tc, ab, rc, large), em, ep, er, path)
+        items = _pool(candidates, rc, allocation["explicit_model"], allocation["explicit_provider"], allocation["explicit_role"], large, path)
+        match = _match(allocation, items)
+        if not match or not match["eligible"]:
+            _event(state, "admission-blocked", aid, at, reason="current availability/authorization/context or route mismatch")
+            _save(file, state)
+            raise AssignmentBlocked("admission blocked; immutable allocation preserved")
+        _event(state, "admitted", aid, at, runtime_id=allocation["selected_runtime_id"], evidence=match["route_evidence"])
+        _save(file, state)
+        result = _project(allocation, state["events"])
+        # Only a fresh admission returns a handoff. This is not an execution or spending lease.
+        result["handoff"] = {key: result[key] for key in (
+            "assignment_id", "task_id", "selected_role", "selected_family", "selected_provider", "selected_runtime_id")}
+        return result
+
+def record_outcome(state_path: str|Path, assignment_id: str, *, outcome: Any, event_id: str,
+                   actual_provider: str|None=None, actual_runtime_id: str|None=None,
+                   actual_model: str|None=None, attempts: int|None=None, reassignments: int|None=None,
+                   timestamp: str|None=None, evidence: list[str]|None=None, task_id: str|None=None,
+                   cumulative: bool=False, target_revision: str|None=None, target_environment: str|None=None):
+    aid = _text(assignment_id, "assignment id"); event_id = _text(event_id, "event id")
+    if cumulative is not True: raise ValueError("cumulative must be true; counters are totals, not deltas")
+    payload = _outcome_payload(outcome, actual_provider, actual_runtime_id, actual_model,
+                               attempts, reassignments, [] if evidence is None else evidence,
+                               "cumulative", target_revision, target_environment)
+    file = Path(state_path).expanduser().resolve()
+    with _lock(file):
+        state = _load(file); allocation = state["assignments"].get(aid)
+        if not allocation: raise AssignmentBlocked("assignment identity is not registered")
+        if task_id is not None and task_id != allocation["task_id"]: raise AssignmentBlocked("outcome task identity mismatch")
+        prior = next((e for e in state["events"] if e["event_id"] == event_id), None)
+        if prior:
+            incoming = {"event_id": event_id, "type": "outcome", "assignment_id": aid, **payload}
+            if {k: v for k, v in prior.items() if k != "at"} != incoming or (timestamp is not None and _time(timestamp) != _time(prior["at"])):
                 raise AssignmentBlocked("conflicting replay for event_id")
-        if actual_runtime_id is not None and "/" not in actual_runtime_id and actual_provider != "GitHub": raise AssignmentBlocked("actual Foundry runtime_id must be qualified")
-        snapshot = {"attempts": attempts, "reassignments": reassignments, "outcome": outcome, "actual_provider": actual_provider or "unknown", "actual_runtime_id": actual_runtime_id or "unknown", "actual_model": actual_model or "unknown", "evidence": evidence, "semantics": "delta" if delta else "cumulative", "target_revision": target_revision, "target_environment": target_environment, "verification": "verified" if _named_evidence(outcome, evidence, target_revision, target_environment) else "unverified"}
-        if delta: selected["attempts"] += attempts; selected["reassignments"] += reassignments
-        else:
-            if attempts < selected["attempts"] or reassignments < selected["reassignments"]: raise AssignmentBlocked("cumulative counters must be nondecreasing")
-            selected["attempts"] = attempts; selected["reassignments"] = reassignments
-        selected.update(snapshot); _event(state, "outcome", aid, at, event_id=event_id, **snapshot); _atomic(file, state); return deepcopy(selected)
+            replay_events = state["events"][:state["events"].index(prior) + 1]
+            return _project(allocation, replay_events)
+        at = _timestamp(timestamp)
+        _event(state, "outcome", aid, at, event_id=event_id, **payload)
+        _save(file, state)
+        return _project(allocation, state["events"])
 
 def export_state(state_path: str|Path, cutoff: str|None=None):
     state = _load(Path(state_path).expanduser().resolve()); boundary = _time(cutoff) if cutoff else None
     events = [e for e in state["events"] if boundary is None or _time(e.get("at", e.get("timestamp"))) < boundary]
     result = deepcopy(state); result["events"] = events
-    result["assignments"] = {k: deepcopy(v) for k, v in state["assignments"].items() if boundary is None or _time(v["created_at"]) < boundary}
-    result["export"] = {"metadata": {"cutoff": _timestamp(cutoff) if cutoff else None, "timezone": "UTC"}, "cursor": {"event_count": len(events), "historical": False}}
+    result["assignments"] = {k: _project(v, events) for k, v in state["assignments"].items() if boundary is None or _time(v["created_at"]) < boundary}
+    result.pop("next_slot", None); result.pop("next_event_id", None)
+    result["export"] = {"metadata": {"cutoff": _timestamp(cutoff) if cutoff else None, "timezone": "UTC"}, "cursor": {"event_count": len(events), "historical": boundary is not None}}
     return result
 
-def _input(a): return json.loads(a.file.read_text(encoding="utf-8")) if a.file else json.loads(sys.stdin.read() or "{}")
+def assignment_from_export(data, assignment_id):
+    """Validate an as-of export, then derive a typed snapshot from its events."""
+    if not isinstance(data, dict) or not isinstance(data.get("export"), dict): raise ValueError("assignment export required")
+    metadata = data["export"].get("metadata")
+    if not isinstance(metadata, dict): raise ValueError("export metadata required")
+    cutoff = _timestamp(_text(metadata.get("cutoff"), "export cutoff"))
+    state = {**data, "next_slot": 0, "next_event_id": 1}
+    _validate_state(state)
+    if any(_time(event["at"]) >= _time(cutoff) for event in state["events"]):
+        raise ValueError("event is not before export cutoff")
+    for aid, allocation in state["assignments"].items():
+        if _project(allocation, state["events"]) != allocation: raise ValueError("export snapshot differs from retained events")
+    if assignment_id not in state["assignments"]: raise ValueError("assignment not present at cutoff")
+    return {**deepcopy(state["assignments"][assignment_id]), "snapshot_cutoff": cutoff}
+
+
+def _input(a):
+    data = json.loads(a.file.read_text(encoding="utf-8-sig")) if a.file else json.loads(sys.stdin.read() or "{}")
+    if not isinstance(data, dict): raise ValueError("request must be a JSON object")
+    return data
+
+
 def main(argv=None):
-    p = argparse.ArgumentParser(description=__doc__); p.add_argument("action", choices=["select", "admit", "spawn", "record", "export"]); p.add_argument("--state", type=Path, default=Path(os.environ.get("COPILOT_HOME", Path.home()/".copilot"))/"token-mizer"/"model-assignments.json"); p.add_argument("--file", type=Path); a = p.parse_args(argv)
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("action", choices=["select", "admit", "record", "export"])
+    p.add_argument("--state", type=Path, default=Path(os.environ.get("COPILOT_HOME") or Path.home()/".copilot")/"token-mizer"/"model-assignments.json")
+    p.add_argument("--file", type=Path); a = p.parse_args(argv)
     try:
         d = _input(a)
-        result = select_assignment(a.state, **d) if a.action == "select" else admit_assignment(a.state, **d) if a.action == "admit" else spawn_handoff(a.state, **d) if a.action == "spawn" else record_outcome(a.state, **d) if a.action == "record" else export_state(a.state, **d)
+        actions = {"select": select_assignment, "admit": admit_assignment, "record": record_outcome, "export": export_state}
+        result = actions[a.action](a.state, **d)
         print(json.dumps(result, indent=2, sort_keys=True)); return 0
-    except (AssignmentBlocked, ValueError, OSError, json.JSONDecodeError) as e:
+    except (AssignmentBlocked, ValueError, OSError, TypeError, KeyError) as e:
         print(json.dumps({"error": type(e).__name__, "message": str(e)}), file=sys.stderr); return 2
 if __name__ == "__main__": raise SystemExit(main())

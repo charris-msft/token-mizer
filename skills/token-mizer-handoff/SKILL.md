@@ -1,18 +1,18 @@
 ---
 name: token-mizer-handoff
-description: Only for the selected Token Mizer agent or an explicit request to activate Token Mizer. Delegate substantial bounded work with compact context and objective checks.
+description: For selected or explicitly activated Token Mizer, including explicit shared invocation through token-mizer-integrate. Delegate substantial bounded work with compact context and objective checks.
 ---
 
 # Lean handoff
 
-Apply only while Token Mizer is selected or explicitly activated. Use `token-mizer-route` first when the route is not established. Explicitly select a runtime ID accepted by the host. Foundry workers require a verified provider mapping. Gemini builders require the policy-authorized `gemini-3.8-flash` route or a provider-qualified equivalent supplied by the host; never invent a provider prefix.
+Apply only while Token Mizer is selected or explicitly activated, including task-scoped invocation through `token-mizer-integrate` by an explicitly invoked consuming agent. Discover actual host-listed dependency names. Use `token-mizer-route` first when the route is not established. Explicitly select a runtime ID accepted by the host. Foundry workers require a verified provider mapping. Gemini builders require the policy-authorized `gemini-3.8-flash` route or a provider-qualified equivalent supplied by the host; never invent a provider prefix.
 
 ## Before spawning
 
-- Keep work requiring five or fewer direct calls in the current session.
+- Keep work requiring five or fewer direct calls in the current session only when coordinator context capacity and route eligibility are established.
 - Delegate a self-contained objective, not an open-ended exploration.
 - Reuse a suitable worker and its checkpoints for follow-ups.
-- Estimate the complete context before spawning. Allocate and then admit immediately before delegation; admission must revalidate current availability, authorization, context, and the immutable role/provider/family/runtime identity. Pass `selected_runtime_id` to spawn, not a family name. Prefer one bounded Gemini builder for substantial implementation only when host capacity and the separate budget policy permit it. Otherwise use Foundry Luna when the task fits; never use Sol unless explicitly selected. Large-context work excludes every Foundry route, including coordinator/direct/Astra paths.
+- Estimate the complete context before delegation. Pool candidates perform the same task role. Allocate and then freshly admit immediately before each host call; admission must revalidate current availability, authorization, context and immutable role/provider/family/runtime identity. Pass the fresh `handoff.selected_runtime_id` to the host, never `selected_model` or a cached handoff. No allocator spawn command exists. Admission is not a spending reservation or exactly-once execution guarantee. Prefer one bounded Gemini builder for substantial implementation only when host capacity and the separate budget policy permit it. Otherwise use Foundry Luna when the task fits; never use Sol unless explicitly selected. Large-context work excludes every Foundry route, including coordinator/direct/Astra paths.
 - For a large-context task, denied or unknown GitHub capacity blocks rather than silently choosing a small-context Foundry worker. Offer only a lossless bounded decomposition when correctness is preserved.
 - Allow only one active worker per constrained Foundry connection when throttling or shared-capacity contention is suspected. Do not launch a Sol, Astra, or Luna replacement on the same connection as a workaround unless the host proves capacity is independent.
 - Preserve required specialist agents, skills, permissions, and approvals.

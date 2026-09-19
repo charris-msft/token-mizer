@@ -21,7 +21,7 @@ class ModelAssignmentTests(unittest.TestCase):
             "context_capacity": 100, "route_evidence": {"source": "host", "verified": True, "provider": "GitHub", "family": "flash", "runtime_id": POLICY.FLASH_MODEL},
         }
         self.luna = {
-            "role": "reviewer", "family": "luna", "provider": "Foundry",
+            "role": "builder", "family": "luna", "provider": "Foundry",
             "runtime_id": "synthetic-connection/" + POLICY.LUNA_MODEL, "available": True, "authorized": True,
             "context_capacity": 100, "route_evidence": {"source": "local", "verified": True, "provider": "Foundry", "family": "luna", "runtime_id": "synthetic-connection/" + POLICY.LUNA_MODEL},
         }
@@ -33,7 +33,7 @@ class ModelAssignmentTests(unittest.TestCase):
         return POLICY.select_assignment(
             self.state,
             assignment_id=assignment_id,
-            task_id="task-1",
+            task_id="task-" + assignment_id,
             task_class="code-change",
             acceptance_boundary="ci-passed",
             required_context=50,
@@ -54,6 +54,15 @@ class ModelAssignmentTests(unittest.TestCase):
         resumed = self.choose("a")
         self.assertEqual(first, resumed)
         self.assertEqual("alternating-context-fitting-pool", first["selection_reason"])
+        self.assertNotEqual(first["task_id"], second["task_id"])
+        self.assertEqual(first["selected_role"], second["selected_role"])
+        self.assertEqual("builder", second["selected_role"])
+        self.assertEqual(self.luna["runtime_id"], second["selected_runtime_id"])
+        self.assertEqual(self.flash["runtime_id"], first["selected_runtime_id"])
+        third = self.choose("role-a", explicit_role="builder")
+        fourth = self.choose("role-b", explicit_role="builder")
+        self.assertEqual("flash", third["selected_family"])
+        self.assertEqual("luna", fourth["selected_family"])
 
     def test_unknown_capacity_never_asserts_fit(self):
         unknown_flash = dict(self.flash, context_capacity="unknown")
@@ -88,6 +97,7 @@ class ModelAssignmentTests(unittest.TestCase):
             self.state,
             selected["assignment_id"],
             outcome="blocked",
+            event_id="observed-1",
             actual_provider="GitHub",
             actual_model=POLICY.FLASH_MODEL,
             attempts=1,
@@ -121,9 +131,14 @@ class ModelAssignmentTests(unittest.TestCase):
         script = ROOT / "scripts" / "model_assignment.py"
         request = {"assignment_id": "parallel-1", "task_id": "task-1", "task_class": "code-change", "acceptance_boundary": "ci-passed", "required_context": 50, "candidates": [self.flash, self.luna]}
         processes = [subprocess.Popen([sys.executable, str(script), "--state", str(self.state), "select"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) for _ in range(2)]
-        outputs = [process.communicate(json.dumps(request), timeout=30) for process in processes]
+        for process in processes:
+            process.stdin.write(json.dumps(request)); process.stdin.close(); process.stdin = None
+        outputs = [process.communicate(timeout=30) for process in processes]
         self.assertTrue(all(process.returncode == 0 for process in processes), outputs)
         self.assertEqual(json.loads(outputs[0][0])["selected_model"], json.loads(outputs[1][0])["selected_model"])
+        state = json.loads(self.state.read_text(encoding="utf-8"))
+        self.assertEqual(1, state["next_slot"])
+        self.assertEqual(1, len(state["events"]))
 
     def test_cli_help_and_json_contract(self):
         import subprocess, sys
@@ -157,9 +172,11 @@ class ModelAssignmentTests(unittest.TestCase):
         with self.assertRaises(POLICY.AssignmentBlocked):
             self.choose("spoof-provider", candidates=[dict(self.flash, provider="Foundry")])
 
-    def test_explicit_runtime_conflict_and_duplicate_roles(self):
+    def test_explicit_runtime_conflict_and_duplicate_routes(self):
         with self.assertRaises(POLICY.AssignmentBlocked):
-            self.choose("duplicate", candidates=[self.flash, dict(self.luna, role="builder")])
+            self.choose("duplicate", candidates=[self.flash, dict(self.flash, authorized=False)])
+        with self.assertRaises(POLICY.AssignmentBlocked):
+            self.choose("mixed-roles", candidates=[self.flash, dict(self.luna, role="reviewer")])
         selected = self.choose("explicit-runtime", candidates=[self.luna], explicit_model=self.luna["runtime_id"])
         with self.assertRaises(POLICY.AssignmentBlocked):
             self.choose("explicit-runtime", candidates=[self.luna], explicit_model=POLICY.FLASH_MODEL)
@@ -172,6 +189,134 @@ class ModelAssignmentTests(unittest.TestCase):
         self.assertEqual(first["attempts"], replay["attempts"])
         with self.assertRaises(POLICY.AssignmentBlocked):
             POLICY.record_outcome(self.state, selected["assignment_id"], outcome="blocked", attempts=1, reassignments=0, cumulative=True, event_id="measure-event")
+
+    def request(self, aid="a", **updates):
+        return {"assignment_id": aid, "task_id": "task-" + aid, "task_class": "code-change",
+                "acceptance_boundary": "ci-passed", "required_context": 50,
+                "candidates": [self.flash, self.luna], **updates}
+
+    def test_cutoff_exports_only_historical_assignment_evidence(self):
+        self.choose("history", now="2026-09-17T10:00:00Z")
+        POLICY.admit_assignment(self.state, **self.request("history", now="2026-09-18T10:00:00Z"))
+        POLICY.record_outcome(self.state, "history", outcome="verified", event_id="verified",
+                              attempts=2, cumulative=True, evidence=["synthetic:tests"],
+                              target_revision="synthetic-sha", target_environment="synthetic",
+                              timestamp="2026-09-18T10:00:00.100Z")
+        self.choose("future", now="2026-09-18T10:00:00.200Z")
+        historical = POLICY.export_state(self.state, "2026-09-17T11:00:00Z")
+        self.assertEqual(["allocated"], [e["type"] for e in historical["events"]])
+        self.assertEqual({"history"}, set(historical["assignments"]))
+        snapshot = historical["assignments"]["history"]
+        self.assertEqual("unknown", snapshot["outcome"])
+        self.assertEqual("unknown", snapshot["admission_status"])
+        self.assertIsNone(snapshot["attempts"])
+        self.assertEqual("unverified", snapshot["verification"])
+        self.assertEqual([], snapshot["evidence"])
+        self.assertEqual("unknown", POLICY.assignment_from_export(historical, "history")["outcome"])
+        fraction = POLICY.export_state(self.state, "2026-09-18T12:00:00.100+02:00")
+        self.assertEqual("unknown", fraction["assignments"]["history"]["outcome"])
+        self.assertEqual(2, POLICY.export_state(self.state)["assignments"]["history"]["attempts"])
+        persisted = json.loads(self.state.read_text())
+        self.assertNotIn("outcome", persisted["assignments"]["history"])
+        self.assertNotIn("admitted", persisted["assignments"]["history"])
+
+    def test_rejected_writes_preserve_bytes_and_replay_is_immutable(self):
+        self.choose("a", now="2026-09-17T10:00:00Z")
+        record = dict(outcome="blocked", attempts=1, cumulative=True, event_id="r1", timestamp="2026-09-17T11:00:00Z")
+        first = POLICY.record_outcome(self.state, "a", **record)
+        POLICY.record_outcome(self.state, "a", **{**record, "attempts": 2, "event_id": "r2", "timestamp": "2026-09-17T12:00:00Z"})
+        before = self.state.read_bytes()
+        self.assertEqual(first, POLICY.record_outcome(self.state, "a", **record))
+        invalid = [
+            {"event_id": "backdated", "attempts": 3, "timestamp": "2026-09-17T09:00:00Z"},
+            {"event_id": "decrease", "attempts": 1, "timestamp": "2026-09-17T13:00:00Z"},
+            {"attempts": 2}, {"timestamp": "2026-09-17T11:00:00.001Z"},
+            {"event_id": "bool", "attempts": True}, {"event_id": "negative", "reassignments": -1},
+            {"event_id": "float", "attempts": 1.5}, {"event_id": "bad-evidence", "evidence": "not-a-list"},
+            {"event_id": "bad-target", "target_revision": {}}, {"event_id": "bad-time", "timestamp": "not-a-time"},
+            {"event_id": "bad-mode", "cumulative": 1},
+        ]
+        for changes in invalid:
+            with self.subTest(changes=changes), self.assertRaises((ValueError, POLICY.AssignmentBlocked)):
+                POLICY.record_outcome(self.state, "a", **{**record, **changes})
+            self.assertEqual(before, self.state.read_bytes())
+            self.assertEqual(2, POLICY.export_state(self.state)["assignments"]["a"]["attempts"])
+        with self.assertRaises(ValueError): self.choose("backdated-allocation", now="2026-09-17T09:00:00Z")
+        self.assertEqual(before, self.state.read_bytes())
+
+    def test_fresh_admit_handoff_and_resume_constraints(self):
+        request = self.request()
+        selected = POLICY.select_assignment(self.state, **request)
+        self.assertNotIn("handoff", selected)
+        admitted = POLICY.admit_assignment(self.state, **request)
+        self.assertEqual(self.flash["runtime_id"], admitted["handoff"]["selected_runtime_id"])
+        with self.assertRaises(POLICY.AssignmentBlocked):
+            POLICY.admit_assignment(self.state, **{**request, "candidates": [dict(self.flash, authorized=False), self.luna]})
+        denied = POLICY.export_state(self.state)["assignments"]["a"]
+        self.assertEqual("blocked", denied["admission_status"])
+        self.assertNotIn("handoff", denied)
+        self.assertNotIn("handoff", POLICY.select_assignment(self.state, **request))
+        self.assertFalse(hasattr(POLICY, "spawn_handoff"))
+        for changes in ({"explicit_model": self.luna["runtime_id"]}, {"explicit_provider": "Foundry"},
+                        {"explicit_role": "reviewer"}, {"required_context": 101}, {"large_context": True}):
+            for action in (POLICY.select_assignment, POLICY.admit_assignment):
+                before = self.state.read_bytes()
+                with self.subTest(changes=changes, action=action.__name__), self.assertRaises(POLICY.AssignmentBlocked):
+                    action(self.state, **{**request, **changes})
+                self.assertEqual(before, self.state.read_bytes())
+
+    def test_unknown_outcome_evidence_and_qualified_github_identity(self):
+        qualified = "synthetic-github/" + POLICY.FLASH_MODEL
+        flash = {**self.flash, "runtime_id": qualified, "route_evidence": {**self.flash["route_evidence"], "runtime_id": qualified}}
+        self.assertEqual(qualified, self.choose("qualified", candidates=[flash])["selected_runtime_id"])
+        for i, updates in enumerate(({}, {"evidence": ["synthetic:test"]}, {"evidence": ["synthetic:test"], "target_revision": "unknown", "target_environment": "test"})):
+            outcome = POLICY.record_outcome(self.state, "qualified", event_id=f"unknown-{i}", outcome="verified", cumulative=True, **updates)
+            self.assertEqual("unverified", outcome["verification"])
+            self.assertEqual("unknown", outcome["actual_runtime_id"])
+            self.assertIsNone(outcome["attempts"])
+            self.assertIsNone(outcome["reassignments"])
+        measured = POLICY.record_outcome(self.state, "qualified", event_id="measured", outcome="blocked",
+                                         attempts=2, reassignments=1, cumulative=True)
+        unmeasured = POLICY.record_outcome(self.state, "qualified", event_id="no-new-count", outcome="blocked", cumulative=True)
+        self.assertEqual(measured["attempts"], unmeasured["attempts"])
+        self.assertEqual(measured["reassignments"], unmeasured["reassignments"])
+
+    def test_concurrent_distinct_selection_and_same_event_replay(self):
+        import subprocess, sys
+        command = [sys.executable, str(ROOT / "scripts" / "model_assignment.py"), "--state", str(self.state)]
+        requests = [self.request("parallel-" + str(i)) for i in range(4)]
+        processes = [subprocess.Popen([*command, "select"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) for _ in requests]
+        for process, request in zip(processes, requests):
+            process.stdin.write(json.dumps(request)); process.stdin.close(); process.stdin = None
+        outputs = [process.communicate(timeout=30) for process in processes]
+        self.assertTrue(all(p.returncode == 0 for p in processes), outputs)
+        state = POLICY.export_state(self.state)
+        self.assertEqual(4, len(state["assignments"]))
+        self.assertEqual(2, sum(a["selected_family"] == "flash" for a in state["assignments"].values()))
+        requests = [{"assignment_id": "parallel-0", "event_id": "same-event", "outcome": "blocked", "attempts": 1, "cumulative": True}] * 2
+        processes = [subprocess.Popen([*command, "record"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) for _ in requests]
+        for process, request in zip(processes, requests):
+            process.stdin.write(json.dumps(request)); process.stdin.close(); process.stdin = None
+        outputs = [process.communicate(timeout=30) for process in processes]
+        self.assertTrue(all(p.returncode == 0 for p in processes), outputs)
+        self.assertEqual(json.loads(outputs[0][0]), json.loads(outputs[1][0]))
+        self.assertEqual(5, len(POLICY.export_state(self.state)["events"]))
+
+    def test_cli_invalid_schema_fails_closed_and_empty_home_falls_back(self):
+        import os, subprocess, sys
+        script = str(ROOT / "scripts" / "model_assignment.py")
+        for text in ("{", "[]", "{}", json.dumps(self.request(typo=True))):
+            result = subprocess.run([sys.executable, script, "select", "--state", str(self.state)], input=text, text=True, capture_output=True)
+            self.assertEqual(2, result.returncode, result.stdout)
+            self.assertIn("message", json.loads(result.stderr))
+            self.assertFalse(self.state.exists())
+        home = Path(self.temp.name) / "home"
+        env = {**os.environ, "COPILOT_HOME": "", "HOME": str(home), "USERPROFILE": str(home)}
+        result = subprocess.run([sys.executable, script, "select"], input=json.dumps(self.request()), text=True, capture_output=True, env=env)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertTrue((home / ".copilot" / "token-mizer" / "model-assignments.json").exists())
+        stale = subprocess.run([sys.executable, script, "spawn", "--state", str(self.state)], input="{}", text=True, capture_output=True)
+        self.assertEqual(2, stale.returncode)
 
 if __name__ == "__main__":
     unittest.main()

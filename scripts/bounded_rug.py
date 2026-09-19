@@ -424,10 +424,17 @@ def validate_record(record: Any) -> None:
             raise RecordError("model assignment boundary/class must match enclosing bounded-RUG task")
         if not isinstance(assignment.get("eligibility"), list):
             raise RecordError("assignment eligibility must be an array")
-        if not isinstance(assignment.get("attempts"), int) or assignment["attempts"] < 0:
-            raise RecordError("assignment attempts must be a nonnegative integer")
-        if not isinstance(assignment.get("reassignments"), int) or assignment["reassignments"] < 0:
-            raise RecordError("assignment reassignments must be a nonnegative integer")
+        for key in ("selected_runtime_id", "selected_role", "selected_family"):
+            require_text(assignment.get(key), f"assignment {key}")
+        created = parse_time(assignment.get("created_at"))
+        observed = parse_time(assignment.get("at"))
+        snapshot_cutoff = parse_time(assignment.get("snapshot_cutoff"))
+        if not created <= observed < snapshot_cutoff:
+            raise RecordError("assignment evidence must precede snapshot cutoff")
+        for key in ("attempts", "reassignments"):
+            value = assignment.get(key)
+            if value is not None and (isinstance(value, bool) or not isinstance(value, int) or value < 0):
+                raise RecordError(f"assignment {key} must be a nonnegative integer or unknown (null)")
     for observation in observations:
         if not isinstance(observation, dict) or observation.get("role") not in ROLES:
             raise RecordError("invalid provider/model observation")
@@ -642,14 +649,19 @@ def add_observation(
 
 
 def add_assignment(
-    record: dict[str, Any], assignment: dict[str, Any], expected_record_revision: int | None = None,
+    record: dict[str, Any], assignment_export: dict[str, Any], assignment_id: str,
+    expected_record_revision: int | None = None,
 ) -> dict[str, Any]:
     validate_record(record)
     if expected_record_revision is not None and expected_record_revision != record["record_revision"]:
         raise RecordError("stale record revision")
     if record["state"] in TERMINAL_STATES:
         raise RecordError("cannot add assignment to a terminal record")
-    candidate = deepcopy(assignment)
+    from model_assignment import AssignmentBlocked, assignment_from_export
+    try:
+        candidate = assignment_from_export(assignment_export, assignment_id)
+    except (AssignmentBlocked, ValueError, TypeError, KeyError) as error:
+        raise RecordError(f"invalid assignment export: {error}") from error
     if candidate.get("task_id") != record["task"]["id"]:
         raise RecordError("model assignment task id must match enclosing bounded-RUG task")
     if candidate.get("task_class") != record["task"]["class"] or candidate.get("acceptance_boundary") != record["task"]["acceptance_boundary"]:
@@ -748,13 +760,19 @@ def export_ledger(record: dict[str, Any], analysis_id: str, cutoff: str) -> dict
         "pilot_mode": record["task"]["mode"],
         "bounded_rug": {
             "record_version": RECORD_VERSION,
+            "acceptance_boundary": record["task"]["acceptance_boundary"],
             "state": record["state"],
             "build_attempts": record["counts"]["build_attempts"],
             "repair_attempts": record["counts"]["repair_attempts"],
             "verifications": record["counts"]["verifications"],
             "provider_model_observations": [o for o in record["provider_model_observations"] if parse_time(o["at"]) < cutoff_time],
             "rug_attachments": attachments,
-            "model_assignments": [m for m in record.get("model_assignments", []) if isinstance(m, dict) and m.get("at") and parse_time(m["at"]) < cutoff_time],
+            "model_assignments": [m for m in record.get("model_assignments", []) if parse_time(m["snapshot_cutoff"]) <= cutoff_time],
+            "assignment_evidence_coverage": {
+                "included": sum(parse_time(m["snapshot_cutoff"]) <= cutoff_time for m in record.get("model_assignments", [])),
+                "excluded_newer_snapshots": sum(parse_time(m["snapshot_cutoff"]) > cutoff_time for m in record.get("model_assignments", [])),
+                "notice": "Excluded or missing evidence is unknown, not zero attempts. Attach an allocator as-of export to retain earlier evidence.",
+            },
             "scope_status": scope_status,
             "verified_target": {
                 "revision": accepted_event.get("target_revision"),
@@ -845,6 +863,12 @@ def build_parser() -> argparse.ArgumentParser:
     observe.add_argument("--at")
     observe.add_argument("--expected-record-revision", type=int, required=True)
 
+    assignment = subparsers.add_parser("add-assignment")
+    assignment.add_argument("--file", type=Path, required=True)
+    assignment.add_argument("--assignment-export", type=Path, required=True)
+    assignment.add_argument("--assignment-id", required=True)
+    assignment.add_argument("--expected-record-revision", type=int, required=True)
+
     rug = subparsers.add_parser("attach-rug")
     rug.add_argument("--file", type=Path, required=True); rug.add_argument("--task-id", required=True); rug.add_argument("--attachment-id", required=True); rug.add_argument("--kind", required=True); rug.add_argument("--ref", required=True); rug.add_argument("--cutoff"); rug.add_argument("--at"); rug.add_argument("--expected-record-revision", type=int, required=True)
 
@@ -927,6 +951,10 @@ def main(argv: list[str] | None = None) -> int:
                             args.status, args.at, args.expected_record_revision,
                         )
                         atomic_write(record_path, record)
+                    elif args.command == "add-assignment":
+                        assignment_export = json.loads(args.assignment_export.read_text(encoding="utf-8-sig"))
+                        record = add_assignment(record, assignment_export, args.assignment_id, args.expected_record_revision)
+                        atomic_write(record_path, record)
                     elif args.command == "attach-rug":
                         record = attach_rug(record, args.attachment_id, args.kind, args.ref, args.at, args.expected_record_revision, args.task_id, args.cutoff)
                         atomic_write(record_path, record)
@@ -947,7 +975,7 @@ def main(argv: list[str] | None = None) -> int:
                         return 0
         print(json.dumps(record, indent=2, sort_keys=True))
         return 0
-    except RecordError as error:
+    except (RecordError, OSError, ValueError, TypeError, KeyError) as error:
         print(f"BLOCKED: {error}", file=sys.stderr)
         return 2
 

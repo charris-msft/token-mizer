@@ -1,11 +1,11 @@
 ---
 name: token-mizer-route
-description: Only for the selected Token Mizer agent or an explicit request to activate Token Mizer. Route substantial work across verified Foundry models and policy-authorized Gemini builders, handle rate limits, and escalate difficult decisions.
+description: For selected or explicitly activated Token Mizer, including explicit shared invocation through token-mizer-integrate. Route substantial work across verified Foundry models and policy-authorized Gemini builders, handle rate limits, and escalate difficult decisions.
 ---
 
 # Budget-aware routing
 
-Apply this skill only while Token Mizer is selected or explicitly activated. Otherwise return without changing routing.
+Apply this skill only while Token Mizer is selected or explicitly activated, including task-scoped invocation through `token-mizer-integrate` by an explicitly invoked consuming agent. Otherwise return without changing routing. Discover the actual host-listed skill names before loading dependencies; never invent a namespace or assume installation.
 
 ## Routes
 
@@ -27,7 +27,7 @@ No Terra route is configured. Preserve a provider-qualified ID that the host act
 
 ## Execute
 
-1. Keep work requiring five or fewer direct tool calls in the inherited coordinator.
+1. Keep work requiring five or fewer direct tool calls in the inherited coordinator only when its context capacity and route eligibility are established. Small work is not exempt from context checks; large-context work excludes every Foundry path.
 2. Estimate total context before delegation: instructions, tool schemas, conversation history, evidence, expected output, and headroom. Check current coordinator context before overflow. Use host-reported capacity when available; unknown capacity is not a fit. Apply this context-fit eligibility before alternation or cost preference.
 3. Check the current coordinator too. An instruction-only selected agent cannot change its host model or context window. If the coordinator is unsuitable, recommend or start an authorized GitHub session with a compact, lossless handoff; routing one child does not enlarge the parent.
 4. Prefer a provider-qualified Astra coordinator selected by the user before Token Mizer. Keep Astra planning and narration compact, avoid repeated reads, and retain hard or high-risk decisions.
@@ -37,7 +37,7 @@ No Terra route is configured. Preserve a provider-qualified ID that the host act
 8. After a failed first implementation or fix, use `provider.escalation_model` for a bounded rubber-duck diagnosis with the reproduction, evidence, and unresolved question. In the bounded-RUG pilot, that diagnosis may authorize the single repair attempt; a second failed verification blocks further automatic implementation.
 9. Delegate self-contained work using `token-mizer-handoff`. Prefer one worker and parallelize only independent work with measurable benefit.
 
-Keep `role`, `family`, `provider`, and `runtime_id` separate. GitHub may use the bare host runtime `gemini-3.8-flash` only with verified host/local metadata; Foundry runtime IDs must be connection-qualified. Allocate an immutable identity, then immediately before delegation admit by revalidating current availability, authorization, context, and exact role/provider/family/runtime. Pass `selected_runtime_id` to spawn. The helper validates annotations only; it does not discover host truth or enforce budget. Record task identity/class/boundary, context-needed and capacity evidence, eligibility exclusions, intended and actual provider/model/runtime, selection reason, attempts, reassignments, and verified outcome. Do not claim randomized or fair comparison when context, authorization, or budget constrained selection.
+Keep `role`, `family`, `provider`, and `runtime_id` separate. Pool alternatives perform the same task role with distinct routes. GitHub may use bare `gemini-3.8-flash` or its verified host-qualified identity; Foundry IDs must be connection-qualified. Allocate an immutable identity, then freshly admit immediately before each host invocation, revalidating current availability, authorization, context and exact role/provider/family/runtime. Use the returned `handoff.selected_runtime_id`, never `selected_model` or a cached handoff. There is no allocator spawn command, money reservation or exactly-once execution guarantee. The helper validates supplied annotations only; it does not discover host truth or enforce budget. Record task identity/class/boundary, context/capacity evidence, exclusions, intended and observed routes, outcome and evidence. Record cumulative nondecreasing counters with unique immutable event IDs; unknown measurements are not zero. Export historical evidence with an exclusive UTC cutoff. Keep runtime/provider IDs and private policy values out of shared diagnostics. Do not claim randomized or fair comparison when context, authorization or budget constrained selection.
 
 ## Policy-gated paid routes
 

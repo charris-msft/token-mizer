@@ -1,11 +1,11 @@
 ---
 name: token-mizer-budget
-description: Only for the selected Token Mizer agent or an explicit request to activate Token Mizer. Check a private dated policy before proactive Gemini builds, paid fallback, or budget exceptions.
+description: For selected or explicitly activated Token Mizer, including explicit shared invocation through token-mizer-integrate. Check a private dated policy before proactive Gemini builds, paid fallback, or budget exceptions.
 ---
 
 # Paid-route gate
 
-Apply only while Token Mizer is selected or explicitly activated.
+Apply only while Token Mizer is selected or explicitly activated, including task-scoped invocation through `token-mizer-integrate` by an explicitly invoked consuming agent. Resolve actual host-listed skill names rather than inventing namespaces. Shared invocation changes activation only, not any paid gate below.
 
 Read the private policy from `$COPILOT_HOME/token-mizer/policy.json` when `COPILOT_HOME` is set, otherwise from the host's Copilot configuration directory under `token-mizer/policy.json`. The file is a dated local allocation, not live billing data or enforcement. If it is missing, invalid, expired, zero-valued, or cannot be enforced, remain on Foundry. Never initialize an allowance silently. An optional `github_models.bounded_builder_model` may name the preferred paid builder; when absent, the explicit Token Mizer preference is `gemini-3.8-flash` if the host exposes it.
 
