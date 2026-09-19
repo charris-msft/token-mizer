@@ -91,6 +91,76 @@ class ModelAssignmentTests(unittest.TestCase):
         self.assertEqual(POLICY.SOL_MODEL, selected["selected_model"])
         self.assertEqual("explicit-user-model", selected["selection_reason"])
 
+    def astra_candidate(self, **updates):
+        runtime = "synthetic-connection/" + POLICY.ASTRA_MODEL
+        return {"role": "reviewer", "family": "astra", "provider": "Foundry",
+                "runtime_id": runtime, "available": True, "authorized": True,
+                "context_capacity": 100,
+                "route_evidence": {"source": "host", "verified": True, "runtime_id": runtime}, **updates}
+
+    def test_explicit_astra_cli_select_and_fresh_admit_preserve_runtime(self):
+        import subprocess, sys
+        candidate = self.astra_candidate()
+        request = self.request("astra", candidates=[candidate], explicit_model=candidate["runtime_id"],
+                               explicit_provider="Foundry", explicit_role="reviewer", path="astra")
+        results = []
+        for action in ("select", "admit"):
+            result = subprocess.run([sys.executable, str(ROOT / "scripts" / "model_assignment.py"),
+                                     action, "--state", str(self.state)], input=json.dumps(request),
+                                    text=True, capture_output=True)
+            self.assertEqual(0, result.returncode, result.stderr)
+            results.append(json.loads(result.stdout))
+        selected, admitted = results
+        self.assertEqual("explicit-policy-astra", selected["selection_reason"])
+        self.assertNotIn("handoff", selected)
+        self.assertEqual(candidate["runtime_id"], admitted["handoff"]["selected_runtime_id"])
+        self.assertEqual("reviewer", admitted["handoff"]["selected_role"])
+        self.assertEqual("Foundry", admitted["handoff"]["selected_provider"])
+        self.assertEqual("astra", admitted["handoff"]["selected_family"])
+        self.assertEqual("unknown", admitted["actual_model"])
+        self.assertEqual("unknown", admitted["outcome"])
+        with self.assertRaises(POLICY.AssignmentBlocked):
+            POLICY.admit_assignment(self.state, **{**request, "candidates": [{**candidate, "authorized": False}]})
+        exported = POLICY.export_state(self.state)["assignments"]["astra"]
+        self.assertEqual("blocked", exported["admission_status"])
+        self.assertNotIn("handoff", exported)
+
+    def test_explicit_astra_requires_current_context_authorization_and_mapping(self):
+        candidate = self.astra_candidate()
+        request = self.request("astra", candidates=[candidate], explicit_model=candidate["runtime_id"], path="astra")
+        for updates in ({"context_capacity": "unknown"}, {"context_capacity": 49},
+                        {"context_capacity": True}, {"authorized": False}, {"available": False},
+                        {"provider": "GitHub"}, {"runtime_id": POLICY.ASTRA_MODEL},
+                        {"route_evidence": {"source": "host", "verified": False, "runtime_id": candidate["runtime_id"]}}):
+            with self.subTest(updates=updates), self.assertRaises(POLICY.AssignmentBlocked):
+                POLICY.select_assignment(self.state, **{**request, "candidates": [{**candidate, **updates}]})
+            self.assertFalse(self.state.exists())
+        for path in ("direct", "coordinator", "astra"):
+            with self.subTest(path=path), self.assertRaises(POLICY.AssignmentBlocked):
+                POLICY.select_assignment(self.state, **{**request, "large_context": True, "path": path})
+            self.assertFalse(self.state.exists())
+        selected = POLICY.select_assignment(self.state, **request)
+        self.assertEqual(selected, POLICY.select_assignment(self.state, **request))
+        for operation in (POLICY.select_assignment, POLICY.admit_assignment):
+            for updates in ({"context_capacity": "unknown"}, {"context_capacity": 49}, {"authorized": False}):
+                with self.subTest(operation=operation.__name__, updates=updates), self.assertRaises(POLICY.AssignmentBlocked):
+                    operation(self.state, **{**request, "candidates": [{**candidate, **updates}]})
+        self.assertEqual("blocked", POLICY.export_state(self.state)["assignments"]["astra"]["admission_status"])
+        state = json.loads(self.state.read_text(encoding="utf-8"))
+        state["assignments"]["astra"]["explicit_model"] = None
+        self.state.write_text(json.dumps(state), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "Astra requires explicit runtime"):
+            POLICY.export_state(self.state)
+
+    def test_astra_never_enters_automatic_flash_luna_rotation(self):
+        astra = self.astra_candidate(role="builder")
+        with self.assertRaises(POLICY.AssignmentBlocked):
+            self.choose("astra-auto", candidates=[astra])
+        selected = [self.choose(f"auto-{i}", candidates=[self.flash, self.luna, astra]) for i in range(4)]
+        self.assertEqual(["flash", "luna", "flash", "luna"], [item["selected_family"] for item in selected])
+        self.assertTrue(all("explicit-policy-route-required" in item["eligibility"][2]["reasons"] for item in selected))
+        self.assertEqual(4, json.loads(self.state.read_text(encoding="utf-8"))["next_slot"])
+
     def test_outcome_records_actual_route_without_reassigning(self):
         selected = self.choose("outcome-1")
         observed = POLICY.record_outcome(

@@ -123,7 +123,7 @@ Use `add-scope` and `observe-model` to record every coordinator, builder, review
 
 ## Assignment and evidence contract
 
-Operational assignment JSON is fail-closed: pool candidates perform the **same role** with distinct family/provider/runtime routes. Families are `flash`, `luna`, or explicit-only `sol`. Every route needs structurally bound `route_evidence` with `source` `host` or `local` and `verified: true`. GitHub accepts bare `gemini-3.8-flash` or a verified host-qualified equivalent; Foundry requires a verified connection-qualified runtime. Preserve the exact host/user-supplied identity, including its connection identifier, privately. Bare Foundry IDs, mismatched evidence, provider/family conflicts, duplicate routes and mixed task roles are rejected. Evidence is a supplied annotation, not independently verified by this helper.
+Operational assignment JSON is fail-closed: pool candidates perform the **same role** with distinct family/provider/runtime routes. Families are `flash`, `luna`, explicit-user-only `sol`, or explicit-policy-authorized `astra`. Automatic rotation remains Flash/Luna only. Astra escalation uses `family: "astra"`, `provider: "Foundry"`, and `explicit_model` equal to the exact host-confirmed qualified `gpt-6-astra` runtime; fresh admission is mandatory. An explicit runtime is not permission: current authorization, route evidence and sufficient known context are still required, and large-context work excludes Astra just like every Foundry route. Every route needs structurally bound `route_evidence` with `source` `host` or `local` and `verified: true`. GitHub accepts bare `gemini-3.8-flash` or a verified host-qualified equivalent; Foundry requires a verified connection-qualified runtime. Preserve the exact host/user-supplied identity, including its connection identifier, privately. Bare Foundry IDs, mismatched evidence, provider/family conflicts, duplicate routes and mixed task roles are rejected. Evidence is a supplied annotation, not independently verified by this helper.
 
 The ordinary flow is `select → admit → caller invokes host → record → export`. Only a fresh `admit` returns a `handoff`; the caller immediately uses its exact `selected_runtime_id`, never `selected_model`. There is no cached spawn command. Admission rechecks current availability, authorization, context and identity, but is not a money reservation or exactly-once execution guarantee. Never reuse a previous handoff after denial or for another call. Resume preserves allocation identity; changed context or explicit identity blocks rather than rerolls. Coordinator inheritance is unchanged.
 
@@ -143,6 +143,9 @@ Regression mapping (synthetic IDs only):
 | Strict counters and exact event replay | `test_cumulative_counter_and_idempotent_replay_contract` |
 | Backdates/conflicting replay leave bytes unchanged | `test_rejected_writes_preserve_bytes_and_replay_is_immutable` |
 | Fresh handoff and current admission | `test_fresh_admit_handoff_and_resume_constraints` |
+| Explicit Astra CLI selection/admission preserves runtime; later denial blocks | `test_explicit_astra_cli_select_and_fresh_admit_preserve_runtime` |
+| Astra requires current context, authorization and mapping; large context blocks | `test_explicit_astra_requires_current_context_authorization_and_mapping` |
+| Astra stays outside automatic Flash/Luna rotation | `test_astra_never_enters_automatic_flash_luna_rotation` |
 | RUG identity and forged cutoff rejection | `test_typed_assignment_binding_and_forged_cutoff_rejected` |
 | Older RUG evidence survives; future snapshots excluded | `test_newer_rug_snapshot_excluded_and_as_of_snapshot_survives` |
 | Public CLI through synthetic host, RUG and report | `test_public_cli_assignment_to_rug_and_report_end_to_end` |

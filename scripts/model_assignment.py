@@ -11,8 +11,10 @@ from typing import Any
 LUNA_MODEL = "gpt-5.6-luna"
 FLASH_MODEL = "gemini-3.8-flash"
 SOL_MODEL = "gpt-5.6-sol"
+ASTRA_MODEL = "gpt-6-astra"
 STATE_VERSION = "4.0"
-FAMILIES = {"luna": ("Foundry", LUNA_MODEL), "sol": ("Foundry", SOL_MODEL), "flash": ("GitHub", FLASH_MODEL)}
+FAMILIES = {"luna": ("Foundry", LUNA_MODEL), "sol": ("Foundry", SOL_MODEL),
+            "astra": ("Foundry", ASTRA_MODEL), "flash": ("GitHub", FLASH_MODEL)}
 ROLES = {"coordinator", "builder", "reviewer", "validator"}
 class AssignmentBlocked(RuntimeError): pass
 
@@ -139,7 +141,8 @@ def _validate_state(state):
                            allocation["large_context"], allocation["path"])
         if allocation["selected_model"] != FAMILIES[route["family"]][1]: raise ValueError("invalid selected model")
         if allocation["large_context"] and route["provider"] == "Foundry": raise ValueError("large-context excludes Foundry")
-        if route["family"] == "sol" and allocation["explicit_model"] != route["runtime_id"]: raise ValueError("Sol requires explicit runtime")
+        if route["family"] in {"sol", "astra"} and allocation["explicit_model"] != route["runtime_id"]:
+            raise ValueError(f"{route['family'].capitalize()} requires explicit runtime")
         if allocation["explicit_model"] not in {None, route["runtime_id"]} or allocation["explicit_provider"] not in {None, route["provider"]}:
             raise ValueError("selected route conflicts with explicit request")
         normalized = []
@@ -232,6 +235,7 @@ def _candidate(raw: Any, required: int, explicit_model: str|None, explicit_provi
     if raw.get("authorized") is not True: reasons.append("unauthorized")
     if not fit: reasons.append("context-fit-unknown-or-insufficient")
     if family == "sol" and explicit_model != runtime: reasons.append("explicit-user-override-required"); fit = False
+    if family == "astra" and explicit_model != runtime: reasons.append("explicit-policy-route-required"); fit = False
     if large and provider == "Foundry": reasons.append("large-context-excludes-Foundry"); fit = False
     if path in {"coordinator", "astra"} and large and provider == "Foundry": fit = False
     if explicit_model is not None and runtime != explicit_model: reasons.append("explicit-runtime-conflict"); fit = False
@@ -295,7 +299,9 @@ def select_assignment(state_path: str|Path, **kwargs):
         if not eligible:
             detail = "large-context-requires-GitHub" if large else "no authorized, available, verified model has confirmed sufficient context capacity"
             raise AssignmentBlocked(detail)
-        if em is not None: chosen = next((x for x in eligible if x["runtime_id"] == em), None); reason = "explicit-user-model"
+        if em is not None:
+            chosen = next((x for x in eligible if x["runtime_id"] == em), None)
+            reason = "explicit-policy-astra" if chosen and chosen["family"] == "astra" else "explicit-user-model"
         else:
             flash = [x for x in eligible if x["family"] == "flash"]; luna = [x for x in eligible if x["family"] == "luna"]
             pool = flash + luna; chosen = pool[state.get("next_slot", 0) % len(pool)] if pool else None
