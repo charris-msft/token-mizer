@@ -10,6 +10,9 @@ from contextlib import closing
 from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+import model_assignment as ASSIGNMENT
+
 MODULE_PATH = ROOT / "scripts" / "bounded_rug.py"
 REPORT_PATH = ROOT / "scripts" / "token_mizer_report.py"
 
@@ -283,6 +286,117 @@ class BoundedRugTests(unittest.TestCase):
         blocked_report = REPORT.build_task_report(db, ledger_path)
         self.assertEqual(blocked_report["portfolio"]["accepted_tasks"], 0)
         self.assertEqual(blocked_report["portfolio"]["pilot_modes"][0]["accepted_tasks"], 0)
+
+    def assignment_request(self):
+        runtime = "synthetic-connection/gpt-5.6-luna"
+        return {"assignment_id": "a", "task_id": "task-1", "task_class": "change", "acceptance_boundary": "ci-passed",
+                "required_context": 50, "now": "2026-09-17T10:00:00Z", "candidates": [
+                    {"role": "builder", "family": "luna", "provider": "Foundry", "runtime_id": runtime,
+                     "available": True, "authorized": True, "context_capacity": 100,
+                     "route_evidence": {"source": "local", "verified": True, "runtime_id": runtime}}]}
+
+    def assignment_export(self):
+        state = self.root / "assignments.json"
+        ASSIGNMENT.select_assignment(state, **self.assignment_request())
+        ASSIGNMENT.record_outcome(state, "a", event_id="outcome", outcome="verified", cumulative=True,
+                                  attempts=1, timestamp="2026-09-18T10:00:00Z", evidence=["synthetic:test"],
+                                  target_revision="synthetic-sha", target_environment="synthetic")
+        return ASSIGNMENT.export_state(state, "2026-09-18T11:00:00Z")
+
+    def test_typed_assignment_binding_and_forged_cutoff_rejected(self):
+        exported = self.assignment_export()
+        for key, value in (("task_id", "wrong-task"), ("task_class", "wrong-class"), ("acceptance_boundary", "merged")):
+            from copy import deepcopy
+            other = deepcopy(self.record)
+            other["task"][{"task_id": "id", "task_class": "class", "acceptance_boundary": "acceptance_boundary"}[key]] = value
+            with self.subTest(key=key), self.assertRaises(RUG.RecordError):
+                RUG.add_assignment(other, exported, "a")
+        exported["export"]["metadata"]["cutoff"] = "2026-09-17T11:00:00Z"
+        with self.assertRaisesRegex(RUG.RecordError, "cutoff"):
+            RUG.add_assignment(self.record, exported, "a")
+        exported["events"] = exported["events"][:1]
+        with self.assertRaisesRegex(RUG.RecordError, "differs"):
+            RUG.add_assignment(self.record, exported, "a")
+
+    def test_newer_rug_snapshot_excluded_and_as_of_snapshot_survives(self):
+        exported = self.assignment_export()
+        self.record = RUG.add_assignment(self.record, exported, "a")
+        self.step("build", "started", 1, 1)
+        ledger = RUG.export_ledger(self.record, "synthetic", "2026-09-17T11:00:00Z")
+        rug = ledger["tasks"][0]["bounded_rug"]
+        self.assertEqual([], rug["model_assignments"])
+        self.assertEqual(1, rug["assignment_evidence_coverage"]["excluded_newer_snapshots"])
+        earlier = ASSIGNMENT.export_state(self.root / "assignments.json", "2026-09-17T10:30:00Z")
+        self.record["model_assignments"] = []
+        self.record = RUG.add_assignment(self.record, earlier, "a")
+        ledger = RUG.export_ledger(self.record, "synthetic", "2026-09-17T11:00:00Z")
+        snapshot = ledger["tasks"][0]["bounded_rug"]["model_assignments"][0]
+        self.assertEqual("unknown", snapshot["outcome"])
+        self.assertIsNone(snapshot["attempts"])
+        self.assertEqual("unknown", snapshot["admission_status"])
+
+    def test_public_cli_assignment_to_rug_and_report_end_to_end(self):
+        assignment_state = self.root / "assignments.json"
+        assignment_script = ROOT / "scripts" / "model_assignment.py"
+        def allocate(action, request):
+            result = subprocess.run([sys.executable, str(assignment_script), action, "--state", str(assignment_state)],
+                                    input=json.dumps(request), text=True, capture_output=True)
+            self.assertEqual(0, result.returncode, result.stderr)
+            return json.loads(result.stdout)
+        request = self.assignment_request()
+        selected = allocate("select", request)
+        admitted = allocate("admit", {**request, "now": "2026-09-17T10:00:01Z"})
+        # Synthetic host boundary: consume the actual handoff, without an inference call.
+        host = subprocess.run([sys.executable, "-c", "import json,sys; h=json.load(sys.stdin); print(json.dumps({'actual_runtime_id':h['selected_runtime_id'],'actual_provider':h['selected_provider'],'task_id':h['task_id']}))"],
+                              input=json.dumps(admitted["handoff"]), text=True, capture_output=True)
+        self.assertEqual(0, host.returncode, host.stderr)
+        observed = json.loads(host.stdout)
+        self.assertEqual(selected["selected_runtime_id"], observed["actual_runtime_id"])
+        measured = allocate("record", {"assignment_id": "a", **observed, "event_id": "measured-1",
+                                       "outcome": "verified", "cumulative": True, "attempts": 1,
+                                       "evidence": ["synthetic:host-stub"], "target_revision": "synthetic-sha",
+                                       "target_environment": "synthetic", "timestamp": "2026-09-17T10:03:00Z"})
+        self.assertEqual("verified", measured["verification"])
+        allocate("record", {"assignment_id": "a", "event_id": "future", "outcome": "blocked", "cumulative": True,
+                            "attempts": 2, "timestamp": "2026-09-18T10:00:00Z"})
+        historical = allocate("export", {"cutoff": "2026-09-17T10:04:00Z"})
+        self.assertEqual(1, historical["assignments"]["a"]["attempts"])
+        export_file = self.root / "assignment-export.json"
+        export_file.write_text(json.dumps(historical), encoding="utf-8")
+        init = self.run_cli("init", "--file", str(self.path), "--task-id", "task-1", "--label", "Synthetic",
+                            "--task-class", "change", "--acceptance-boundary", "ci-passed", "--coordinator-session", "synthetic",
+                            "--revision", "synthetic-sha", "--environment", "synthetic", "--at", "2026-09-17T10:00:00Z")
+        self.assertEqual(0, init.returncode, init.stderr)
+        attached = self.run_cli("add-assignment", "--file", str(self.path), "--assignment-export", str(export_file),
+                                "--assignment-id", "a", "--expected-record-revision", "0")
+        self.assertEqual(0, attached.returncode, attached.stderr)
+        self.assertEqual(1, len(json.loads(attached.stdout)["model_assignments"]))
+        before = self.path.read_bytes()
+        historical["assignments"]["a"]["task_id"] = "mismatched"
+        export_file.write_text(json.dumps(historical), encoding="utf-8")
+        bad = self.run_cli("add-assignment", "--file", str(self.path), "--assignment-export", str(export_file),
+                           "--assignment-id", "a", "--expected-record-revision", "1")
+        self.assertEqual(2, bad.returncode)
+        self.assertEqual(before, self.path.read_bytes())
+        built = self.run_cli("transition", "--file", str(self.path), "--to", "build", "--result", "started",
+                             "--event-id", "build", "--expected-sequence", "0", "--expected-record-revision", "1", "--at", "2026-09-17T10:01:00Z")
+        self.assertEqual(0, built.returncode, built.stderr)
+        ledger_path = self.root / "ledger.json"
+        exported = self.run_cli("export-ledger", "--file", str(self.path), "--output", str(ledger_path),
+                                "--analysis-id", "synthetic", "--cutoff", "2026-09-17T11:00:00Z")
+        self.assertEqual(0, exported.returncode, exported.stderr)
+        self.assertEqual(1, len(json.loads(exported.stdout)["tasks"][0]["bounded_rug"]["model_assignments"]))
+        db = self.root / "session-store.db"
+        with closing(sqlite3.connect(db)) as connection:
+            connection.execute("CREATE TABLE assistant_usage_events (session_id TEXT, model TEXT, output_tokens INTEGER, duration_ms INTEGER, created_at TEXT, agent_id TEXT, api_endpoint TEXT)")
+        report = subprocess.run([sys.executable, str(REPORT_PATH), "--db", str(db), "--start", "2026-09-17T10:00:00Z",
+                                 "--end", "2026-09-17T11:00:00Z", "--model-like", "%", "--rug-ledger", str(ledger_path), "--format", "json"],
+                                text=True, capture_output=True)
+        self.assertEqual(0, report.returncode, report.stderr)
+        evidence = json.loads(report.stdout)["rug_ingestion"]["assignment_evidence"]
+        self.assertEqual(1, evidence["matched_count"])
+        self.assertEqual(selected["selected_runtime_id"], evidence["matched"][0]["actual_runtime_id"])
+        self.assertEqual(1, evidence["matched"][0]["attempts"])
 
     def run_cli(self, *arguments):
         return subprocess.run(

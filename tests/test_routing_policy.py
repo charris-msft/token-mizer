@@ -25,7 +25,7 @@ class RoutingPolicyTests(unittest.TestCase):
     def test_release_versions_match(self):
         plugin = json.loads(read(PLUGIN))
         marketplace = json.loads(read(MARKETPLACE))
-        self.assertEqual("1.5.0", plugin["version"])
+        self.assertEqual("1.6.0", plugin["version"])
         self.assertEqual(plugin["version"], marketplace["metadata"]["version"])
         self.assertEqual(plugin["version"], marketplace["plugins"][0]["version"])
 
@@ -42,15 +42,16 @@ class RoutingPolicyTests(unittest.TestCase):
         self.assertEqual("gemini-3.8-flash", policy["github_models"]["bounded_builder_model"])
         self.assertIn("Zero values keep Gemini and every automatic paid route disabled", policy["notes"])
 
-    def test_gemini_preference_is_policy_gated_with_sol_fallback(self):
+    def test_pool_is_context_first_and_sol_is_explicit_only(self):
         route = read(ROUTE)
         budget = read(BUDGET)
         agent = read(AGENT)
         for text in (route, budget, agent):
             self.assertIn("gemini-3.8-flash", text)
+        self.assertIn("context-fit eligibility before alternation", route)
+        self.assertIn("large-context task", route)
+        self.assertIn("Sol only on explicit user override", route)
         self.assertIn("Missing, expired, zero-valued, or unenforceable policy blocks Gemini", route)
-        self.assertIn("routes to Foundry Sol", route)
-        self.assertIn("five-minute capacity threshold does not apply to this proactive route", route)
         self.assertIn("Gemini preference must not bypass that threshold", budget)
 
     def test_astra_coordinates_and_validates_bounded_builders(self):
@@ -58,6 +59,7 @@ class RoutingPolicyTests(unittest.TestCase):
         handoff = read(HANDOFF)
         readme = read(README)
         self.assertIn("Astra coordinator", route)
+        self.assertIn("current coordinator context", route)
         self.assertIn("applicable repository-wide CI-equivalent checks", handoff)
         self.assertIn("affected-package tests", handoff)
         self.assertIn("edited-file tests alone", handoff)
@@ -81,6 +83,7 @@ class RoutingPolicyTests(unittest.TestCase):
     def test_report_distinguishes_proactive_and_capacity_routes(self):
         report = read(REPORT)
         self.assertIn("proactive Gemini 3.8 Flash builders", report)
+        self.assertIn("context-fit evidence", report)
         self.assertIn("five-minute-threshold capacity fallback", report)
         self.assertIn("eligibility, approval, attempted model, accepted runtime ID, and actual observed use", report)
         self.assertIn("Do not claim Gemini is faster, cheaper, or better", report)

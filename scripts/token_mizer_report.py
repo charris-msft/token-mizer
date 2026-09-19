@@ -1405,6 +1405,56 @@ def aggregate(rows: list[dict[str, Any]], provider_mode: bool) -> list[dict[str,
     return results
 
 
+def ingest_rug_ledger(path: Path, start: str, end: str) -> dict[str, Any]:
+    """Ingest bounded-RUG export without inventing provider matches."""
+    try: data=json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error: raise ReportUnavailable(f"invalid RUG ledger: {error}") from error
+    if not isinstance(data, dict) or not isinstance(data.get("tasks"), list): raise ReportUnavailable("RUG ledger requires tasks")
+    lo, hi=parse_timestamp(start), parse_timestamp(end); matched=[]; assignments=[]; excluded=0
+    for task in data["tasks"]:
+        if not isinstance(task, dict): continue
+        rug=task.get("bounded_rug") or {}
+        if not isinstance(rug, dict): raise ReportUnavailable("bounded_rug must be an object")
+        for key in ("provider_model_observations", "model_assignments"):
+            if not isinstance(rug.get(key, []), list): raise ReportUnavailable(f"{key} must be an array")
+        for item in rug.get("provider_model_observations", []):
+            if not isinstance(item, dict): continue
+            try: at=parse_timestamp(item.get("at"))
+            except (TypeError, ValueError): continue
+            if lo <= at < hi and all(item.get(key) for key in ("role", "provider", "model", "status")):
+                matched.append({"task_id":task.get("id"), **{k:item[k] for k in ("role","provider","model","status","at")}})
+        coverage = rug.get("assignment_evidence_coverage", {})
+        if not isinstance(coverage, dict): raise ReportUnavailable("assignment evidence coverage must be an object")
+        newer = coverage.get("excluded_newer_snapshots", 0)
+        if isinstance(newer, bool) or not isinstance(newer, int) or newer < 0:
+            raise ReportUnavailable("excluded snapshot count must be a nonnegative integer")
+        excluded += newer
+        for item in rug.get("model_assignments", []):
+            if not isinstance(item, dict):
+                excluded += 1
+                continue
+            try:
+                at = parse_timestamp(item.get("at"))
+                created = parse_timestamp(item.get("created_at"))
+                cutoff = parse_timestamp(item.get("snapshot_cutoff"))
+                ledger_cutoff = parse_timestamp(data.get("cutoff"))
+            except (TypeError, ValueError):
+                excluded += 1
+                continue
+            bound = (all(isinstance(item.get(key), str) and item[key].strip()
+                         for key in ("task_id", "task_class", "acceptance_boundary"))
+                     and item.get("task_id") == task.get("id") and item.get("task_class") == task.get("type")
+                     and item.get("acceptance_boundary") == rug.get("acceptance_boundary"))
+            if not bound or not (created <= at < cutoff <= min(hi, ledger_cutoff)) or not (lo <= at < hi) or not item.get("assignment_id") or not item.get("selected_runtime_id"):
+                excluded += 1
+                continue
+            assignments.append({"task_id": task["id"], **{key: item.get(key) for key in (
+                "assignment_id", "task_class", "acceptance_boundary", "selected_role", "selected_provider",
+                "selected_runtime_id", "actual_provider", "actual_runtime_id", "outcome", "verification",
+                "attempts", "reassignments", "evidence", "route_evidence", "snapshot_cutoff")}, "at": at.isoformat()})
+    return {"source":"bounded-rug-ledger","window":{"start_inclusive":lo.isoformat(),"end_exclusive":hi.isoformat()},"matched_observations":matched,"matched_count":len(matched),"assignment_evidence":{"matched":assignments,"matched_count":len(assignments),"excluded_count":excluded,"notice":"Observational assignment evidence only; no causal, authorization, budget, or savings claim. Missing or excluded evidence is unknown, not zero attempts."},"comparison_notice":"Only explicitly matched RUG evidence is reported; absent matches remain unknown."}
+
+
 def build_report(
     db_path: Path,
     start_text: str,
@@ -1531,6 +1581,7 @@ def main(argv: list[str] | None = None) -> int:
         help="optional versioned task annotation JSON for task-level accounting",
     )
     parser.add_argument("--format", choices=("table", "json"), default="table")
+    parser.add_argument("--rug-ledger", type=Path, help="optional bounded-RUG export for explicit evidence ingestion")
     args = parser.parse_args(argv)
 
     try:
@@ -1545,6 +1596,8 @@ def main(argv: list[str] | None = None) -> int:
         )
         if args.task_ledger:
             report["task_analysis"] = build_task_report(args.db, args.task_ledger)
+        if args.rug_ledger:
+            report["rug_ingestion"] = ingest_rug_ledger(args.rug_ledger, args.start, args.end)
     except ReportUnavailable as error:
         print(f"UNAVAILABLE: {error}", file=sys.stderr)
         return 2

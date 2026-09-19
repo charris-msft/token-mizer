@@ -2,7 +2,7 @@
   "provider": {
     "connection_id": "replace-with-your-foundry-connection-id",
     "name": "Foundry",
-    "default_model": "gpt-5.6-sol",
+    "default_model": "gpt-5.6-luna",
     "escalation_model": "gpt-6-astra",
     "bounded_task_model": "gpt-5.6-luna"
   },
@@ -19,5 +19,5 @@
     "reserve_requires_explicit_approval": true,
     "user_reported_remaining_approximate": 0
   },
-  "notes": "The Gemini model is an optional paid builder preference, not a Foundry mapping. Replace provider, dates, and amounts locally. Zero values keep Gemini and every automatic paid route disabled. Never commit your real policy."
+  "notes": "The Gemini model is an optional paid builder preference, not a Foundry mapping. Replace provider, dates, and amounts locally. Zero values keep Gemini and every automatic paid route disabled. Large-context tasks require confirmed GitHub capacity and do not fall back to Luna. Never commit your real policy."
 }
