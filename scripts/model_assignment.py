@@ -22,6 +22,7 @@ FAMILIES = {"luna": ("Foundry", LUNA_MODEL), "sol6": ("GitHub", BUILTIN_SOL_MODE
             "astra": ("GitHub", ASTRA_MODEL), "grok": ("GitHub", GROK_MODEL),
             "deepseek": ("Foundry", DEEPSEEK_MODEL)}
 BUILTIN_FAMILIES = {"sol6", "astra", "grok"}
+BUILTIN_MODELS = {BUILTIN_SOL_MODEL, ASTRA_MODEL, GROK_MODEL}
 ROLES = {"coordinator", "builder", "reviewer", "validator"}
 class AssignmentBlocked(RuntimeError): pass
 
@@ -216,6 +217,28 @@ def _load(path: Path):
     state["assignments"] = {aid: {key: value[key] for key in fields} for aid, value in state["assignments"].items()}
     return state
 
+def _require_builtin_opt_in():
+    home = Path(os.environ.get("COPILOT_HOME") or Path.home() / ".copilot")
+    path = home / "token-mizer" / "policy.json"
+    try:
+        def unique_pairs(pairs):
+            result = {}
+            for key, value in pairs:
+                if key in result: raise ValueError("duplicate policy key")
+                result[key] = value
+            return result
+        policy = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=unique_pairs)
+    except (OSError, UnicodeError, ValueError) as error:
+        raise AssignmentBlocked("private local built-in policy missing or invalid") from error
+    models = policy.get("github_models") if isinstance(policy, dict) else None
+    if not isinstance(models, dict) or set(models) != {"builtin_uncapped_opt_in", "allowed_builtin_models"}:
+        raise AssignmentBlocked("private local built-in policy missing or contradictory")
+    allowed = models["allowed_builtin_models"]
+    if (models["builtin_uncapped_opt_in"] is not True or not isinstance(allowed, list)
+        or len(allowed) != len(BUILTIN_MODELS) or set(map(str, allowed)) != BUILTIN_MODELS
+        or any(not isinstance(model, str) for model in allowed)):
+        raise AssignmentBlocked("private local built-in opt-in or allowlist denied")
+
 def _event(state: dict[str, Any], typ: str, aid: str, at: str, event_id: str | None = None, **extra):
     event_id = event_id or f"e-{state.get('next_event_id', 1)}"
     if any(e.get("event_id") == event_id for e in state["events"]): raise AssignmentBlocked("event_id already exists")
@@ -227,6 +250,8 @@ def _event(state: dict[str, Any], typ: str, aid: str, at: str, event_id: str | N
 
 def _runtime(raw: dict[str, Any], provider: str, family: str, model: str) -> str:
     runtime = _text(raw.get("runtime_id"), "candidate runtime_id")
+    if provider == "GitHub" and family in BUILTIN_FAMILIES and runtime != model:
+        raise AssignmentBlocked("fresh built-in runtime must be the exact bare host model ID")
     if runtime != model or provider != "GitHub":
         if "/" not in runtime or runtime.startswith("/") or runtime.endswith("/") or "\\" in runtime:
             raise AssignmentBlocked("runtime_id must be connection-qualified (except bare GitHub runtime)")
@@ -353,6 +378,7 @@ def select_assignment(state_path: str|Path, **kwargs):
             if not match or not match["eligible"]:
                 _event(state, "reuse-blocked", aid, at, reason="current admission failed"); _save(file, state)
                 raise AssignmentBlocked("resume blocked; historical assignment preserved")
+            if prior["selected_family"] in BUILTIN_FAMILIES: _require_builtin_opt_in()
             return _project(prior, state["events"])
         if path == "deepseek-pilot" and any(a["task_id"] == tid for a in state["assignments"].values()):
             raise AssignmentBlocked("DeepSeek pilot task already has an immutable assignment; a second attempt is forbidden")
@@ -360,9 +386,10 @@ def select_assignment(state_path: str|Path, **kwargs):
         eligible = [x for x in items if x["eligible"]]
         if not eligible:
             detail = ("large-context-requires-GitHub" if large else
-                      "pilot requires host-verified known capacity, authorization and a bounded repair contract"
+                      "pilot blocked: " + ",".join(sorted({reason for item in items for reason in item["reasons"]}))
                       if path == "deepseek-pilot" else
-                      "no authorized, available, verified model has confirmed sufficient context capacity")
+                      "no authorized, available, verified model has confirmed sufficient context capacity: "
+                      + ",".join(sorted({reason for item in items for reason in item["reasons"]})))
             raise AssignmentBlocked(detail)
         if em is not None:
             chosen = next((x for x in eligible if x["runtime_id"] == em), None)
@@ -376,6 +403,7 @@ def select_assignment(state_path: str|Path, **kwargs):
             chosen = next((x for family in preference for x in eligible if x["family"] == family), None)
             reason = "context-fit-policy-preference"
         if not chosen: raise AssignmentBlocked("explicit runtime, role, or provider is unavailable, unauthorized, unverified, or does not fit")
+        if chosen["family"] in BUILTIN_FAMILIES: _require_builtin_opt_in()
         result = {"assignment_id": aid, "task_id": tid, "task_class": tc, "acceptance_boundary": ab, "required_context": rc, "large_context": large, "path": path, "explicit_model": em, "explicit_provider": ep, "explicit_role": er, "paid_policy": deepcopy(policy), "intent_evidence": deepcopy(intent), "capacity_evidence": deepcopy(chosen["capacity_evidence"]), "selection_reason": reason, "selected_role": chosen["role"], "selected_family": chosen["family"], "selected_provider": chosen["provider"], "selected_runtime_id": chosen["runtime_id"], "selected_model": FAMILIES[chosen["family"]][1], "route_evidence": deepcopy(chosen["route_evidence"]), "eligibility": items, "created_at": at}
         state["assignments"][aid] = result
         _event(state, "allocated", aid, at, identity={"task_id": tid, "task_class": tc, "acceptance_boundary": ab, "required_context": rc, "large_context": large})
@@ -392,6 +420,7 @@ def admit_assignment(state_path: str|Path, **kwargs):
         _resume_check(allocation, (tid, tc, ab, rc, large), em, ep, er, path)
         if policy != allocation["paid_policy"] or intent != allocation["intent_evidence"]:
             raise AssignmentBlocked("changed policy or intent conflicts with immutable assignment")
+        if allocation["selected_family"] in BUILTIN_FAMILIES: _require_builtin_opt_in()
         if allocation["selected_family"] == "deepseek" and any(
             event["type"] == "admitted" and event["assignment_id"] == aid for event in state["events"]
         ):

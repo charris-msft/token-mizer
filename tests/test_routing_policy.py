@@ -46,6 +46,7 @@ class RoutingPolicyTests(unittest.TestCase):
         self.assertIn("no built-in or standing DeepSeek authorization", policy["notes"])
         self.assertIn("Missing/false standing flag requires a new explicit user approval", read(ROUTE))
         self.assertIn("the allocator does not itself read the private policy", read(BUDGET))
+        self.assertIn("helper cannot independently verify those host annotations", read(ROUTE))
 
     def test_pool_is_context_first_and_retired_routes_are_historical_only(self):
         route = read(ROUTE)

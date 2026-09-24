@@ -1,10 +1,12 @@
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location("model_assignment", ROOT / "scripts" / "model_assignment.py")
@@ -30,6 +32,15 @@ class ModelAssignmentTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.state = Path(self.temp.name) / "assignments.json"
+        self.policy = Path(self.temp.name) / "token-mizer" / "policy.json"
+        self.policy.parent.mkdir()
+        self.policy.write_text(json.dumps({"github_models": {
+            "builtin_uncapped_opt_in": True,
+            "allowed_builtin_models": sorted(POLICY.BUILTIN_MODELS),
+        }}))
+        self.environment = patch.dict(os.environ, {"COPILOT_HOME": self.temp.name})
+        self.environment.start()
+        self.addCleanup(self.environment.stop)
 
     def tearDown(self):
         self.temp.cleanup()
@@ -55,6 +66,44 @@ class ModelAssignmentTests(unittest.TestCase):
                 self.choose("denied", candidates=[candidate("sol6")], paid_policy=policy)
         self.assertEqual(POLICY.STATE_VERSION, json.loads(self.state.read_text())["schema_version"])
 
+    def test_private_opt_in_is_required_at_select_resume_and_admit(self):
+        for value in (None, False, {}, {"builtin_uncapped_opt_in": False,
+                      "allowed_builtin_models": sorted(POLICY.BUILTIN_MODELS)},
+                      {"builtin_uncapped_opt_in": True, "allowed_builtin_models": ["gpt-6-sol"]},
+                      {"builtin_uncapped_opt_in": True,
+                       "allowed_builtin_models": sorted(POLICY.BUILTIN_MODELS), "valid_through": "2026-01-01"},
+                      {"builtin_uncapped_opt_in": True,
+                       "allowed_builtin_models": sorted(POLICY.BUILTIN_MODELS), "authorized": False}):
+            with self.subTest(value=value), tempfile.TemporaryDirectory() as folder:
+                state = Path(folder) / "state.json"
+                if value is None:
+                    self.policy.unlink()
+                else:
+                    self.policy.write_text(json.dumps({"github_models": value}))
+                with self.assertRaisesRegex(POLICY.AssignmentBlocked, "private local"):
+                    POLICY.select_assignment(state, **self.request("denied", candidates=[candidate("sol6")]))
+                self.assertFalse(state.exists())
+                self.policy.write_text(json.dumps({"github_models": {
+                    "builtin_uncapped_opt_in": True,
+                    "allowed_builtin_models": sorted(POLICY.BUILTIN_MODELS)}}))
+        request = self.request("revoke", candidates=[candidate("sol6")])
+        self.choose("revoke", candidates=[candidate("sol6")])
+        POLICY.admit_assignment(self.state, **request)
+        self.policy.write_text(json.dumps({"github_models": {
+            "builtin_uncapped_opt_in": False,
+            "allowed_builtin_models": sorted(POLICY.BUILTIN_MODELS)}}))
+        before = self.state.read_bytes()
+        for action in (POLICY.select_assignment, POLICY.admit_assignment):
+            with self.subTest(action=action.__name__), self.assertRaisesRegex(
+                    POLICY.AssignmentBlocked, "private local"):
+                action(self.state, **request)
+            self.assertEqual(before, self.state.read_bytes())
+        self.policy.write_text('{"github_models":{"builtin_uncapped_opt_in":false,'
+                               '"builtin_uncapped_opt_in":true,'
+                               '"allowed_builtin_models":["gpt-6-sol","gpt-6-astra","grok-4.7"]}}')
+        with self.assertRaisesRegex(POLICY.AssignmentBlocked, "invalid"):
+            POLICY.admit_assignment(self.state, **request)
+
     def test_context_authorization_and_exact_host_provider_evidence(self):
         for update in ({"context_capacity": "unknown"}, {"context_capacity": 49},
                        {"available": False}, {"authorized": False}):
@@ -65,6 +114,12 @@ class ModelAssignmentTests(unittest.TestCase):
                                            "family": "sol6", "runtime_id": "gpt-6-sol"}}):
             with self.subTest(update=update), self.assertRaises(POLICY.AssignmentBlocked):
                 self.choose("spoof", candidates=[candidate("sol6", **update)])
+        qualified = candidate("sol6", runtime_id="synthetic-github/gpt-6-sol",
+                              route_evidence={"source": "host", "verified": True,
+                                              "provider": "GitHub", "family": "sol6",
+                                              "runtime_id": "synthetic-github/gpt-6-sol"})
+        with self.assertRaisesRegex(POLICY.AssignmentBlocked, "exact bare"):
+            self.choose("qualified-spoof", candidates=[qualified])
         with self.assertRaises(POLICY.AssignmentBlocked):
             self.choose("duplicate", candidates=[candidate("sol6"), candidate("sol6", authorized=False)])
         with self.assertRaises(POLICY.AssignmentBlocked):
@@ -105,23 +160,27 @@ class ModelAssignmentTests(unittest.TestCase):
         with self.assertRaisesRegex(POLICY.AssignmentBlocked, "only one"):
             POLICY.admit_assignment(self.state, **request)
         self.assertEqual(admitted_bytes, self.state.read_bytes())
-        for change in ({"context_capacity": "unknown"}, {"authorized": False}, {"available": False}):
-            with self.subTest(change=change), self.assertRaises(POLICY.AssignmentBlocked):
-                POLICY.select_assignment(self.state, **{**request, "assignment_id": str(change),
-                    "candidates": [candidate("deepseek", **change)]})
-        with self.assertRaisesRegex(POLICY.AssignmentBlocked, "host-verified"):
-            self.choose("unknown-pilot", task_class="deployment-repair", path="deepseek-pilot",
-                        candidates=[candidate("deepseek", capacity_evidence=None)], intent_evidence=pilot,
-                        paid_policy=None)
+        negatives = (
+            ({"context_capacity": "unknown"}, "context-fit-unknown-or-insufficient"),
+            ({"authorized": False}, "unauthorized"),
+            ({"available": False}, "unavailable"),
+            ({"capacity_evidence": None}, "host-verified-pilot-capacity-required"),
+        )
+        for index, (change, reason) in enumerate(negatives):
+            with self.subTest(change=change), self.assertRaisesRegex(POLICY.AssignmentBlocked, reason):
+                POLICY.select_assignment(self.state, **{**request, "assignment_id": f"negative-{index}",
+                    "task_id": f"task-negative-{index}", "candidates": [candidate("deepseek", **change)]})
         with self.assertRaisesRegex(POLICY.AssignmentBlocked, "second attempt"):
             POLICY.select_assignment(self.state, **{**request, "assignment_id": "second",
                                                      "task_id": request["task_id"]})
         self.assertEqual("admitted", POLICY.export_state(self.state)["assignments"]["pilot"]["admission_status"])
-        for changes in ({"task_class": "code-change"}, {"path": "direct"},
+        for index, changes in enumerate(({"task_class": "code-change"}, {"path": "direct"},
                         {"intent_evidence": {**pilot, "bounded_attempts": 2}},
-                        {"intent_evidence": {**pilot, "live_verification": False}}):
-            with self.subTest(changes=changes), self.assertRaises(POLICY.AssignmentBlocked):
-                POLICY.select_assignment(self.state, **{**request, "assignment_id": str(changes), **changes})
+                        {"intent_evidence": {**pilot, "live_verification": False}})):
+            with self.subTest(changes=changes), self.assertRaisesRegex(
+                    POLICY.AssignmentBlocked, "bounded-deployment-repair-pilot-required"):
+                POLICY.select_assignment(self.state, **{**request, "assignment_id": f"contract-{index}",
+                    "task_id": f"task-contract-{index}", **changes})
         with self.assertRaises(POLICY.AssignmentBlocked):
             self.choose("not-fallback", candidates=[candidate("deepseek")], intent_evidence=pilot)
 
