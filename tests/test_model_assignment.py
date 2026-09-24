@@ -255,6 +255,24 @@ class ModelAssignmentTests(unittest.TestCase):
         self.assertEqual(1, sum(event["type"] == "admitted" for event in
                                 POLICY.export_state(self.state)["events"]))
 
+    def test_standing_user_reference_is_reusable_only_across_distinct_pilot_tasks(self):
+        standing = {"kind": "deployment-repair-pilot", "source": "user",
+                    "evidence_reference": "private:standing-user-approval", "bounded_attempts": 1,
+                    "reproduction": True, "ci": True, "live_verification": True}
+        for aid in ("repair-one", "repair-two"):
+            with self.subTest(aid=aid):
+                request = self.request(aid, task_class="deployment-repair",
+                                       acceptance_boundary="deployed-and-healthy", path="deepseek-pilot",
+                                       candidates=[candidate("deepseek")], intent_evidence=standing,
+                                       paid_policy=None)
+                self.assertEqual("deepseek", POLICY.select_assignment(self.state, **request)["selected_family"])
+                self.assertEqual(aid, POLICY.admit_assignment(self.state, **request)["assignment_id"])
+                with self.assertRaisesRegex(POLICY.AssignmentBlocked, "only one"):
+                    POLICY.admit_assignment(self.state, **request)
+                with self.assertRaisesRegex(POLICY.AssignmentBlocked, "second attempt"):
+                    POLICY.select_assignment(self.state, **{**request, "assignment_id": aid + "-retry"})
+        self.assertEqual(2, len(POLICY.export_state(self.state)["assignments"]))
+
 
 if __name__ == "__main__":
     unittest.main()

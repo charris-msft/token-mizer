@@ -40,9 +40,12 @@ class RoutingPolicyTests(unittest.TestCase):
         ):
             self.assertEqual(0, budget[key])
         self.assertIs(False, policy["github_models"]["builtin_uncapped_opt_in"])
+        self.assertIs(False, policy["foundry_pilots"]["deepseek_deployment_repair_enabled"])
         self.assertEqual(["gpt-6-sol", "gpt-6-astra", "grok-4.7"],
                          policy["github_models"]["allowed_builtin_models"])
-        self.assertIn("no built-in authorization", policy["notes"])
+        self.assertIn("no built-in or standing DeepSeek authorization", policy["notes"])
+        self.assertIn("Missing/false standing flag requires a new explicit user approval", read(ROUTE))
+        self.assertIn("the allocator does not itself read the private policy", read(BUDGET))
 
     def test_pool_is_context_first_and_retired_routes_are_historical_only(self):
         route = read(ROUTE)
