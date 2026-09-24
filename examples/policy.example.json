@@ -3,11 +3,15 @@
     "connection_id": "replace-with-your-foundry-connection-id",
     "name": "Foundry",
     "default_model": "gpt-5.6-luna",
-    "escalation_model": "gpt-6-astra",
-    "bounded_task_model": "gpt-5.6-luna"
+    "bounded_task_model": "gpt-5.6-luna",
+    "repair_pilot_model": "DeepSeek-V4.1-Flash"
   },
   "github_models": {
-    "bounded_builder_model": "gemini-3.8-flash"
+    "builtin_uncapped_opt_in": false,
+    "allowed_builtin_models": ["gpt-6-sol", "gpt-6-astra", "grok-4.7"]
+  },
+  "foundry_pilots": {
+    "deepseek_deployment_repair_enabled": false
   },
   "github_budget": {
     "valid_from": "2026-01-01",
@@ -19,5 +23,5 @@
     "reserve_requires_explicit_approval": true,
     "user_reported_remaining_approximate": 0
   },
-  "notes": "The Gemini model is an optional paid builder preference, not a Foundry mapping. Replace provider, dates, and amounts locally. Zero values keep Gemini and every automatic paid route disabled. Large-context tasks require confirmed GitHub capacity and do not fall back to Luna. Never commit your real policy."
+  "notes": "This public template grants no built-in or standing DeepSeek authorization. Only explicit user approval in a private local policy may enable the three allowed built-ins without a dollar cap, or the bounded DeepSeek deployment-repair pilot across eligible tasks. Without the standing DeepSeek flag, each pilot task requires its own explicit user approval. Other paid routes keep dated spending gates. Large-context tasks never silently fall back to Luna. Never commit your real policy."
 }

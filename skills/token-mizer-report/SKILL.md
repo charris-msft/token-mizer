@@ -119,16 +119,16 @@ Offer the default unclassified mode when provider comparison is unnecessary or h
 
 For an effectiveness report, supplement throughput with time-bounded structured session and tool evidence. Keep policy eligibility separate from observed behavior and report:
 
-- tasks and route distribution across Astra coordination, proactive Gemini 3.8 Flash builders, Foundry Luna fallback, explicit-only Sol overrides, and separate capacity fallback;
+- tasks and route distribution across built-in GPT-6 Sol ordinary work, built-in Astra diagnosis, explicitly urgent Grok 4.7, bounded Foundry DeepSeek repair pilot, independently eligible Foundry Luna economy work, retired historical Gemini 3.8 Flash/GPT-5.6 Sol, and separate capacity fallback;
 - context-fit evidence: estimated need, host-reported capacity, unknown/insufficient exclusions, coordinator suitability, and whether a large-context task was blocked rather than sent to Luna;
 - completion and failure proxies, separating authentication/environment, throttling/capacity, tool, test, and reasoning failures;
 - median and p90 duration when timestamps are reliable;
 - input, output, cache, retry, and duplicate-worker evidence when available;
-- paid-route eligibility, approval, attempted model, accepted runtime ID, and actual observed use as distinct states;
-- proactive Gemini assignments versus five-minute-threshold capacity fallback as separate route reasons;
+- paid-route eligibility, local built-in opt-in, approval, attempted model, accepted runtime ID, and actual observed use as distinct states;
+- historical proactive Gemini assignments versus five-minute-threshold capacity fallback as separate route reasons; never treat historical use as fresh eligibility;
 - first-fix success and post-failure Astra escalation when evidence supports them.
 
-Authentication or unavailable-provider errors require login/environment recovery and are not quota evidence. For explicit 429, TPM, quota, or documented throttling, check bounded retries, `Retry-After`, one active worker per constrained connection, checkpoint reuse, and coordinator yielding. Do not claim Gemini is faster, cheaper, or better from preference or an uncontrolled workload. Do not infer success from the final assistant message, billing from multipliers, or causal routing improvements from small uncontrolled samples. If structured evidence or attribution is unavailable, name the missing capability and stop rather than reconstructing private prompts.
+Authentication or unavailable-provider errors require login/environment recovery and are not quota evidence. For explicit 429, TPM, quota, or documented throttling, check bounded retries, `Retry-After`, one active worker per constrained connection, checkpoint reuse, and coordinator yielding. Do not claim Grok is faster or any preferred route is cheaper or better from preference or an uncontrolled workload. Do not infer success from the final assistant message, billing from multipliers, or causal routing improvements from small uncontrolled samples. If structured evidence or attribution is unavailable, name the missing capability and stop rather than reconstructing private prompts.
 
 ## Privacy and output
 
