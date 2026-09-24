@@ -1,16 +1,17 @@
 # Token Mizer
 
-Token Mizer is an opt-in GitHub Copilot plugin that uses context-first worker-pool routing, a Foundry coordinator, policy-authorized Gemini builders, and Foundry Luna fallbacks while minimizing duplicated context, unnecessary calls, and unbounded paid use.
+Token Mizer is an opt-in GitHub Copilot plugin that routes by verified context, host authorization, and a private local policy. The current preference is selected built-in GitHub models, with an independent Foundry Luna economy route and a bounded Foundry DeepSeek deployment-repair pilot.
 
 ## What it does
 
-- **Astra** is the recommended inherited coordinator for planning, hard decisions, compact delegation, verification, and diagnosis after a failed first fix.
-- **Gemini 3.8 Flash** is preferred for substantial bounded implementation and build tasks only when the local paid policy and enforceable spending safeguards authorize it.
-- **Luna** is the ordinary Foundry route for context-fitting bounded work when Gemini is unavailable or not authorized.
-- **Sol** is never selected automatically. It is available only when the user explicitly overrides the pool.
-- Context fit is evaluated before alternation or cost preference, using host-reported capacity and a total estimate covering instructions, tool schemas, history, evidence, output, and headroom.
+- **Built-in GPT-6 Sol** is preferred for ordinary substantial eligible work after explicit private opt-in.
+- **Built-in GPT-6 Astra** handles evidenced hard diagnosis or a failed first fix. **Built-in Grok 4.7** is considered only for explicitly urgent work; preference is not a latency benchmark.
+- **Foundry DeepSeek-V4.1-Flash** is an explicitly approved deployment-repair pilot with one bounded implementation attempt, original reproduction, full applicable CI, and live verification. Unknown capacity or authorization blocks it; a failed attempt escalates to Astra instead of spawning another DeepSeek attempt.
+- **Foundry Luna** is an independently eligible economy option when its context fits, not a substitute when a large-context route is blocked.
+- **Gemini 3.8 Flash and GPT-5.6 Sol** are retired for fresh allocation and admission; old route evidence remains readable.
+- Context fit precedes preference, using host-reported capacity and a total estimate covering instructions, tool schemas, history, evidence, output, and headroom.
 - **Terra is not used.**
-- Every paid route fails closed unless a valid nonzero local policy, authoritative usage data, and bounded spending controls are available.
+- The public built-in opt-in defaults off. Explicit private approval enables uncapped *automatic* routing only for GPT-6 Sol, GPT-6 Astra and Grok 4.7, without inventing a hard spending limit. Other paid routes retain their dated usage and enforcement gate.
 - Authentication failures stop with recovery guidance. Only explicit throttling evidence triggers bounded retry behavior.
 - The reporting skill automatically handles token-rate, TPM, tokens-per-second, model-throughput, usage, provider-comparison, and routing-effectiveness questions while Token Mizer is selected.
 
@@ -19,13 +20,13 @@ The bundled skills activate only after you select **Token Mizer**, explicitly as
 ## Prerequisites
 
 1. Install a current [GitHub Copilot CLI](https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/plugins-finding-installing) build with plugin support.
-2. Configure access to Foundry models in your Copilot host.
-3. Copy and complete the local policy example so Token Mizer can map your account-specific provider connection to Sol, Luna, and Astra and can fail closed on paid builders.
-4. Select your provider-qualified Forge Foundry Astra model as the coordinator before selecting Token Mizer. Select Foundry Luna instead when you want the economy coordinator.
+2. Confirm host access and actor permission for the built-in models you intend to use. Configure Foundry access separately if using Luna or the DeepSeek pilot.
+3. Copy and complete the local policy example. Keep its built-in opt-in false unless the user explicitly authorizes these three models; map the account-specific Foundry connection privately.
+4. Select an eligible built-in GPT-6 Sol coordinator before selecting Token Mizer, or a verified Foundry Luna coordinator when you want an economy option.
 
-The public agent profile is model-unpinned. It inherits the coordinator selected by the host and cannot switch the current coordinator automatically. Before overflow, Token Mizer checks whether that coordinator has enough context. An instruction-only agent cannot enlarge its host window; when unsuitable, recommend or start an authorized GitHub session and pass a compact faithful handoff. Routing one child does not enlarge the parent. Selecting provider-qualified Foundry Astra during setup prevents accidental GitHub-billed coordinator use while keeping difficult decisions on the orchestrator. Astra plans compact bounded tasks, assigns eligible builds to Gemini, and verifies the returned evidence. Worker routes use either host catalog metadata or the user-confirmed local provider mapping and must be accepted by the runtime. Token Mizer never removes a provider prefix or silently substitutes a paid model.
+The public agent profile is model-unpinned. It inherits the host-selected coordinator and cannot switch that runtime automatically. It checks the coordinator's context before overflow; if unsuitable, it recommends or starts an authorized GitHub session with a compact faithful handoff. Routing a child does not enlarge the parent. Foundry routes need a verified host catalog entry or a private, user-confirmed provider mapping and an accepted runtime ID. Built-in routes need authoritative host identity and the local opt-in. Never remove a provider prefix or silently substitute a paid model.
 
-`gemini-3.8-flash` is treated as GitHub-billed unless authoritative host metadata supplies a provider-qualified ID. Token Mizer preserves a qualified ID the host actually offers and never invents a Foundry Gemini connection. If Gemini is unavailable, not authorized, or cannot be bounded safely, an ordinary context-fitting task stays on Foundry Luna. A large-context task does not silently fall back to a small-context Foundry model: it blocks with the missing capacity or budget permission, or uses only a lossless bounded decomposition. Unknown capacity is not treated as fit.
+A bare `gpt-6-sol`, `gpt-6-astra`, or `grok-4.7` is treated as GitHub-billed absent authoritative contrary metadata. Unknown host capacity is never treated as fit. A large-context task does not silently fall back to a smaller Foundry route: it blocks with the missing capacity or authorization, or uses a lossless bounded decomposition.
 
 ## Install
 
@@ -79,9 +80,9 @@ Token Mizer never publishes or initializes your budget. To create a local policy
 - `$env:COPILOT_HOME\token-mizer\policy.json` when `COPILOT_HOME` is set
 - otherwise, your Copilot configuration directory under `token-mizer\policy.json`
 
-Set `provider.connection_id` to the Foundry connection ID confirmed for your account and keep the model names aligned with runtime-accepted IDs. The optional `github_models.bounded_builder_model` selects the preferred paid builder; `gemini-3.8-flash` is the current default preference when the host exposes it. Existing policies without this optional object remain valid. Replace the example dates and zero amounts locally. Keep the real file out of source control. Zero values, missing files, invalid files, expired dates, and unavailable enforcement disable Gemini and every automatic paid route while leaving correctly mapped Foundry routing available.
+Set `provider.connection_id` to the Foundry connection ID confirmed for your account, if applicable. Only explicit user approval in the private local policy may change `github_models.builtin_uncapped_opt_in` to `true`. The allowed list is exactly `gpt-6-sol`, `gpt-6-astra`, `grok-4.7`; editing the example list does not expand the allocator's allowlist. Missing/false opt-in blocks their automatic use. Existing private policies without this flag do not imply approval. Keep the real file out of source control.
 
-The policy is an allocation, not a live billing system. Token Mizer cannot meter billing, reserve funds, or impose a technical spending cap. Without authoritative usage and bounded-spend enforcement, it remains on Foundry or asks for a specific exception rather than spending automatically. The Gemini preference authorizes proactive consideration for a suitable bounded build, not unmetered use and not an override of a zero-budget period. When both Flash and Luna genuinely fit and pass every gate, assignments alternate via a durable identity-keyed state. Resume returns the prior assignment instead of consuming another slot. Every decision records context evidence, exclusions, intended and actual model/provider, reason, attempts, reassignments, and verified outcome; constrained selections are reported as biased, not randomized.
+This opt-in is a user authorization for uncapped routing of those three built-ins, **not** a dollar ceiling, billing meter, reservation or change to actor-level permission. Other paid routes still require a valid dated budget, authoritative usage and enforceable in-flight limits; missing/expired/zero values block those routes. The allocator stores immutable task identity, eligibility and event evidence. A resumed v5 assignment keeps its route and must pass fresh admission; a v4 historical assignment can be exported or recorded but cannot be freshly selected or admitted.
 
 ## Provider failures and shared capacity
 
@@ -89,10 +90,10 @@ Token Mizer separates authentication and configuration failures from throttling:
 
 - Azure CLI token, login, tenant, credential-helper, provider-ID, and unsupported-model errors stop immediately with actionable recovery guidance. Token Mizer never runs `az login`, exposes tokens, or treats these errors as quota exhaustion.
 - Only explicit 429, TPM, quota, capacity, or documented throttling responses trigger retries.
-- Sol, Astra, and Luna on one Foundry connection may share capacity. Token Mizer limits a constrained connection to one active worker, reuses the existing session and checkpoints, and does not switch models as a presumed workaround.
+- Luna and DeepSeek on one Foundry connection may share capacity. Token Mizer limits a constrained connection to one active worker, reuses the existing session and checkpoints, and does not switch models as a presumed workaround.
 - Retries respect `Retry-After` and are bounded to three attempts and five minutes of cumulative waiting. The coordinator yields while waiting instead of polling or competing for the same capacity.
 - After the bound, Token Mizer reports the blocker and waits for an explicit or genuinely scheduled resume. Five minutes makes capacity fallback eligible for evaluation, never automatically authorized.
-- Proactive Gemini builder selection is a separate route: a suitable bounded build can use it immediately when every paid gate passes. That does not remove the five-minute threshold from a separate capacity fallback.
+- An opted-in built-in preference is distinct from the separately gated five-minute capacity fallback.
 
 ## Optional bounded-RUG pilot
 
@@ -100,7 +101,7 @@ The bounded-RUG mode is opt-in per task and does not change Token Mizer's defaul
 
 `scripts\model_assignment.py` is also a small public, fail-closed CLI. Run `python scripts\model_assignment.py --help`; each `select`, `admit`, `record`, and `export` action reads one JSON object from stdin (or `--file`) and writes JSON to stdout, with errors on stderr and a nonzero exit. State defaults to `%COPILOT_HOME%\token-mizer\model-assignments.json`, falling back to `%USERPROFILE%\.copilot\token-mizer\model-assignments.json`; pass `--state` for isolated tests. Selection/admission validates supplied provider evidence, authorization, and context annotations before creating or reusing an immutable assignment; outcomes append timestamped evidence events and export supports an exclusive UTC cutoff. An unset or empty `COPILOT_HOME` uses the fallback. See the isolated synthetic example below; never treat example capacity or authorization as live host evidence.
 
-`scripts\bounded_rug.py` stores a versioned private task record atomically and enforces the `task → build → verify → repair → verify → accepted|blocked` bounds. `scripts\model_assignment.py` stores identity-keyed assignments atomically, applies context fit before alternation, and records actual outcomes without consuming a new slot on resume. A private registry under `$COPILOT_HOME\token-mizer\task-registry.json` binds each task ID to one canonical record path, with `~\.copilot` as the fallback when `COPILOT_HOME` is unset. Registry-first file locking makes revision checks atomic across resumptions. Use the global `--registry` option to select another private registry for isolated automation or tests. It rejects stale record revisions, replayed events, counter resets, duplicate task identities, invalid transitions, and acceptance without evidence bound to the exact verified revision and environment. Scope completeness is a separate durable attestation that defaults to `unknown`; terminal state never makes it complete. The helper validates annotation structure, not whether an evidence reference is true. Keep records and registry files outside the repository and never put credentials, policy values, prompts, or full logs in them.
+`scripts\bounded_rug.py` stores a versioned private task record atomically and enforces the `task → build → verify → repair → verify → accepted|blocked` bounds. `scripts\model_assignment.py` stores identity-keyed assignments atomically, applies context fit before route preference, and records actual outcomes without remapping on resume. A private registry under `$COPILOT_HOME\token-mizer\task-registry.json` binds each task ID to one canonical record path, with `~\.copilot` as the fallback when `COPILOT_HOME` is unset. Registry-first file locking makes revision checks atomic across resumptions. Use the global `--registry` option to select another private registry for isolated automation or tests. It rejects stale record revisions, replayed events, counter resets, duplicate task identities, invalid transitions, and acceptance without evidence bound to the exact verified revision and environment. Scope completeness is a separate durable attestation that defaults to `unknown`; terminal state never makes it complete. The helper validates annotation structure, not whether an evidence reference is true. Keep records and registry files outside the repository and never put credentials, policy values, prompts, or full logs in them.
 
 The following is a **synthetic annotation-only example**, not a successful CI run: the helper does not execute the named check or verify the invented evidence reference. Use a disposable `COPILOT_HOME` directory and no private policy when trying it. In a real run, execute the checks first, use their actual evidence/target, and attest scope only after verifying participant coverage:
 
@@ -123,11 +124,11 @@ Use `add-scope` and `observe-model` to record every coordinator, builder, review
 
 ## Assignment and evidence contract
 
-Operational assignment JSON is fail-closed: pool candidates perform the **same role** with distinct family/provider/runtime routes. Families are `flash`, `luna`, explicit-user-only `sol`, or explicit-policy-authorized `astra`. Automatic rotation remains Flash/Luna only. Astra escalation uses `family: "astra"`, `provider: "Foundry"`, and `explicit_model` equal to the exact host-confirmed qualified `gpt-6-astra` runtime; fresh admission is mandatory. An explicit runtime is not permission: current authorization, route evidence and sufficient known context are still required, and large-context work excludes Astra just like every Foundry route. Every route needs structurally bound `route_evidence` with `source` `host` or `local` and `verified: true`. GitHub accepts bare `gemini-3.8-flash` or a verified host-qualified equivalent; Foundry requires a verified connection-qualified runtime. Preserve the exact host/user-supplied identity, including its connection identifier, privately. Bare Foundry IDs, mismatched evidence, provider/family conflicts, duplicate routes and mixed task roles are rejected. Evidence is a supplied annotation, not independently verified by this helper.
+Operational assignment JSON is fail-closed: pool candidates perform the **same role** with distinct family/provider/runtime routes. Fresh families are `sol6`, `astra`, `grok` (GitHub/built-in), `luna`, and `deepseek` (Foundry). An explicit runtime is not permission. Context, actor authorization, host availability, role, and exact runtime are checked at selection and admission. GitHub routes require host-sourced provider/family/runtime evidence and the explicit private-local `paid_policy` opt-in; Foundry routes require qualified IDs. Unknown capacity never fits. Grok requires user-sourced urgent evidence; Astra requires evidenced hard diagnosis or first failed fix; DeepSeek requires `path: "deepseek-pilot"`, `task_class: "deployment-repair"`, host-verified `capacity_evidence` bound to runtime and integer capacity, and user approval of one builder attempt with reproduction, CI and live verification. The caller must actually enforce these annotations and verify the host accepts the runtime. One pilot assignment per task ID and one fresh pilot admission are permitted within the durable state. Duplicate routes, mixed roles, mismatched identities and provider spoofing fail closed. Foundry routes never qualify for large-context tasks.
 
-The ordinary flow is `select → admit → caller invokes host → record → export`. Only a fresh `admit` returns a `handoff`; the caller immediately uses its exact `selected_runtime_id`, never `selected_model`. There is no cached spawn command. Admission rechecks current availability, authorization, context and identity, but is not a money reservation or exactly-once execution guarantee. Never reuse a previous handoff after denial or for another call. Resume preserves allocation identity; changed context or explicit identity blocks rather than rerolls. Coordinator inheritance is unchanged.
+The ordinary flow is `select → admit → caller invokes host → record → export`. Only a fresh `admit` returns a `handoff`; the caller immediately uses its exact `selected_runtime_id`, never `selected_model`. There is no cached spawn command. Admission rechecks current availability, authorization, context, immutable policy/intent and identity, but is not a money reservation or exactly-once execution guarantee. Never reuse a previous handoff after denial or for another call. Resume preserves allocation identity; changed context or explicit identity blocks rather than rerolls. Coordinator inheritance is unchanged.
 
-Allocation metadata is immutable; historical outcomes, admission and counters are reconstructed from retained events strictly before the UTC cutoff. Missing measurements remain unknown (`null` counters), never zero attempts. Outcome counters are cumulative totals (`cumulative: true`), nonnegative non-boolean integers with no decreases. Each outcome requires an immutable `event_id`; identical replay is idempotent and conflicting replay is rejected. Default times are generated under the write lock. Explicit backdated writes are rejected before atomic replacement, leaving prior bytes readable and unchanged. Verification requires evidence plus revision/environment annotations; this does not prove execution or acceptance. Legacy v4 states containing delta outcomes, cached spawn events or incomplete admission evidence fail closed; preserve them separately rather than inventing a migration history.
+Allocation metadata is immutable; historical outcomes, admission and counters are reconstructed from retained events strictly before the UTC cutoff. Missing measurements remain unknown (`null` counters), never zero attempts. Outcome counters are cumulative totals (`cumulative: true`), nonnegative non-boolean integers with no decreases. Each outcome requires an immutable `event_id`; identical replay is idempotent and conflicting replay is rejected. Default times are generated under the write lock. Explicit backdated writes are rejected before atomic replacement, leaving prior bytes readable and unchanged. Verification requires evidence plus revision/environment annotations; this does not prove execution or acceptance. Valid v4 states (including retired routes) remain readable/exportable and can append outcome events, but **all** v4 selection and fresh admission is denied without changing the recorded identity. Start a separate v5 state for new assignments. Invalid v4 delta outcomes, cached spawn events or incomplete admission evidence still fail closed.
 
 Optional typed RUG ingestion uses `bounded_rug.py add-assignment --file <record> --assignment-export <as-of-export> --assignment-id <id> --expected-record-revision <revision>`. The export must have an explicit cutoff and match its retained events and the record's task/class/boundary. `attach-rug` attaches reference strings only. Newer snapshots are excluded at older ledger cutoffs, with unknown-evidence coverage reported. Ingest an already reconstructed older allocator export to retain earlier observations. Feed the ledger to the report's `--rug-ledger` option; observations appear in `rug_ingestion`. Ordinary routing does not require RUG.
 
@@ -135,17 +136,15 @@ Regression mapping (synthetic IDs only):
 
 | Contract reproduction | Named regression |
 |---|---|
-| Large context excludes every Foundry route | `test_large_context_excludes_foundry_on_direct_coordinator_and_astra_paths` |
-| Denied or changed-task resume blocks | `test_resume_revalidates_current_admission_and_identity` |
-| Qualified Foundry and bare GitHub accepted; bare Foundry/spoof rejected | `test_runtime_identity_provider_family_matrix` |
-| Changed explicit identity and duplicate routes block | `test_explicit_runtime_conflict_and_duplicate_routes` |
-| Cutoff assignment/event leakage is excluded | `test_cutoff_exports_only_historical_assignment_evidence` |
-| Strict counters and exact event replay | `test_cumulative_counter_and_idempotent_replay_contract` |
-| Backdates/conflicting replay leave bytes unchanged | `test_rejected_writes_preserve_bytes_and_replay_is_immutable` |
-| Fresh handoff and current admission | `test_fresh_admit_handoff_and_resume_constraints` |
-| Explicit Astra CLI selection/admission preserves runtime; later denial blocks | `test_explicit_astra_cli_select_and_fresh_admit_preserve_runtime` |
-| Astra requires current context, authorization and mapping; large context blocks | `test_explicit_astra_requires_current_context_authorization_and_mapping` |
-| Astra stays outside automatic Flash/Luna rotation | `test_astra_never_enters_automatic_flash_luna_rotation` |
+| Built-in preference and independent Luna eligibility | `test_default_sol6_and_independent_luna_without_opt_in` |
+| Host capacity, authorization, identity, duplicate routes | `test_context_authorization_and_exact_host_provider_evidence` |
+| Urgent Grok and failed-fix Astra require evidence | `test_urgent_and_failed_fix_are_evidenced_and_not_default` |
+| Bounded DeepSeek repair pilot and denied/unknown capacity | `test_deepseek_pilot_only_bounded_repair_and_known_capacity` |
+| Fresh handoff, revoked policy and immutable identity | `test_fresh_admission_rechecks_policy_identity_and_runtime` |
+| v4 export/record readable, fresh use denied | `test_v4_history_read_export_record_and_retired_admission_denied` |
+| Retired Gemini and GPT-5.6 Sol reject explicit fresh requests | `test_retired_routes_rejected_even_with_explicit_override` |
+| Exact event replay, cutoff and CLI | `test_record_replay_cutoff_cli_and_concurrent_selection` |
+| Concurrent pilot IDs/admission cannot reset single-attempt bound | `test_concurrent_same_task_cannot_duplicate_pilot_admission` |
 | RUG identity and forged cutoff rejection | `test_typed_assignment_binding_and_forged_cutoff_rejected` |
 | Older RUG evidence survives; future snapshots excluded | `test_newer_rug_snapshot_excluded_and_as_of_snapshot_survives` |
 | Public CLI through synthetic host, RUG and report | `test_public_cli_assignment_to_rug_and_report_end_to_end` |
@@ -201,7 +200,7 @@ The ledger distinguishes CI-passed, merged, deployed-but-not-live-verified, depl
 
 Provider attribution is off by default. `--provider-attribution metadata` reads only selected sessions' model-selection metadata, rejects stale or in-request model switches, and labels missing evidence unknown. It never infers provider from API endpoint.
 
-Routing-effectiveness reports retain Astra/Gemini/Sol/Luna route evidence, failure classes, retries, duplicate workers, paid eligibility versus actual use, first-fix rate, and post-failure escalation. Authentication failures remain separate from capacity evidence. Task KPI priority is request-to-verified-live outcome, with model/tool time separate, p50/p90, all-attempt credits per accepted task, first-pass gate rate, and matured reopened/rollback rates. Every comparison must state its analysis version, cutoff, and evidence coverage.
+Routing-effectiveness reports retain current built-in/Foundry and historical Gemini/GPT-5.6 Sol route evidence, failure classes, retries, duplicate workers, paid eligibility versus actual use, first-fix rate, and post-failure escalation. Authentication failures remain separate from capacity evidence. Task KPI priority is request-to-verified-live outcome, with model/tool time separate, p50/p90, all-attempt credits per accepted task, first-pass gate rate, and matured reopened/rollback rates. Every comparison must state its analysis version, cutoff, and evidence coverage.
 
 The helper uses read-only SQLite URI mode, schema introspection, parameterized SQL, exact UTC filtering, and no uploads, installs, writes, collection hooks, scheduled jobs, policy changes, or LLM calls. Missing data produces `UNAVAILABLE`, not guessed metrics.
 
@@ -221,7 +220,7 @@ Then start a fresh session and run `/agent` in Copilot CLI.
 Expected results:
 
 - `plugin list` shows one enabled `token-mizer` entry.
-- Marketplace browse shows `token-mizer` version `1.6.0` or newer.
+- Marketplace browse shows `token-mizer` version `1.7.0` or newer.
 - `/agent` lists **Token Mizer**.
 
 If CLI discovery succeeds but the desktop App picker still does not show the agent, restart the App and open a new session. Plugin agents depend on host support and cache refresh behavior. Report the App version, CLI version, `copilot plugin list --json` output, and whether `/agent` sees Token Mizer. Do not treat successful installation alone as proof that a particular App build renders the agent.
@@ -247,8 +246,8 @@ scripts/token_mizer_report.py        Read-only usage and throughput helper
 tests/test_bounded_rug.py             Bounded transition, persistence, CLI, and reporting tests
 tests/test_token_mizer_report.py      Synthetic reporting fixture tests
 tests/test_routing_policy.py          Synthetic routing-policy invariants
-tests/test_model_assignment.py        Context-fit, alternation, resume, and explicit-Sol tests
-examples/policy.example.json         Safe, zero-budget local policy template
+tests/test_model_assignment.py        Context-fit, strict provider, pilot, legacy and admission tests
+examples/policy.example.json         Safe, built-in-opt-in-off local policy template
 examples/task-ledger.example.json     Synthetic task annotation template
 ```
 

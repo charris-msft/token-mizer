@@ -1,8 +1,8 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "token-mizer",
-  "version": "1.6.0",
-  "description": "Opt-in, context-first worker-pool routing with bounded verification, authorized Gemini builders, and Foundry Luna fallback.",
+  "version": "1.7.0",
+  "description": "Opt-in, context-first routing with approved built-in GPT-6 Sol/Astra/Grok, bounded Foundry repair pilot, and independent Luna economy route.",
   "author": {
     "name": "Chris Harris"
   },

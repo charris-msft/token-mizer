@@ -1,66 +1,32 @@
 ---
 name: token-mizer-route
-description: For selected or explicitly activated Token Mizer, including explicit shared invocation through token-mizer-integrate. Route substantial work across verified Foundry models and policy-authorized Gemini builders, handle rate limits, and escalate difficult decisions.
+description: Opt-in context-first routing across verified built-in models and independently eligible Foundry workers, including task-scoped token-mizer-integrate calls.
 ---
 
-# Budget-aware routing
+# Context-first routing
 
-Apply this skill only while Token Mizer is selected or explicitly activated, including task-scoped invocation through `token-mizer-integrate` by an explicitly invoked consuming agent. Otherwise return without changing routing. Discover the actual host-listed skill names before loading dependencies; never invent a namespace or assume installation.
+Apply only when Token Mizer is selected or explicitly activated through `token-mizer-integrate`. Discover the actual host-listed skill names before loading dependencies. The inherited coordinator cannot switch its own model or context window. If its context is insufficient, use an authorized new session with a compact lossless handoff, or block.
 
-## Routes
+Estimate complete context (instructions, tools, history, evidence, output, headroom). Require host-confirmed sufficient capacity, exact accepted runtime ID, provider identity, actor authorization, permitted role, and current availability before assignment and again immediately before each host invocation. Unknown capacity is not a fit. Foundry runtime IDs must be connection-qualified and verified against host catalog or the user-confirmed local provider mapping; GitHub/built-in models require host evidence. A bare built-in ID is GitHub-billed absent authoritative contrary evidence. Never fabricate provider mappings, capacity, effort settings, billing, or a speed/quality advantage.
 
-Read the private local policy described by `token-mizer-budget`. Resolve a Foundry mapping from either of these sources:
-
-1. The current host catalog explicitly identifies the model as Foundry-backed.
-2. The user-confirmed local `provider` object supplies `connection_id`, `name`, `default_model`, `escalation_model`, and `bounded_task_model`.
-
-For a local mapping, form runtime IDs as `provider.connection_id/model-name` unless a configured model is already fully qualified. Use an ID only when the runtime tool accepts it. Provider IDs are account-specific and must remain local. If neither source establishes provider identity, fail closed and report that Foundry routing is not configured.
-
-| Model family | Role |
+| Route | Eligibility and use |
 |---|---|
-| Astra | Recommended inherited coordinator: planning, decomposition, hard decisions, verification, and diagnosis after a failed first fix |
-| Gemini 3.8 Flash | Preferred policy-authorized GitHub model when estimated context fits and paid gates pass |
-| Luna | Foundry fallback for context-fitting bounded work and cheap non-build extraction, classification, formatting, or mechanical work |
-| Sol | Never selected automatically; Sol only on explicit user override |
+| Built-in GPT-6 Sol (`sol6`, `gpt-6-sol`) | Ordinary substantial eligible work; preferred when local built-in opt-in is true |
+| Built-in GPT-6 Astra (`astra`, `gpt-6-astra`) | Hard diagnosis or evidenced failed first fix; never spawn an alternative worker for the same unresolved fix |
+| Built-in Grok 4.7 (`grok`, `grok-4.7`) | Explicitly urgent user request only; preference does not prove measured latency |
+| Foundry DeepSeek-V4.1-Flash (`deepseek`) | User-approved, deployment-repair-only pilot: one bounded implementation attempt with original reproduction, full applicable CI, and live verification; block unknown capacity/runtime/authorization; failed repair escalates to Astra, not another DeepSeek attempt |
+| Foundry GPT-5.6 Luna (`luna`) | Independently eligible, context-fitting economy route, not an automatic substitute for a blocked large task |
 
-No Terra route is configured. Preserve a provider-qualified ID that the host actually supplies. A bare `gemini-3.8-flash` ID is GitHub-billed unless authoritative host metadata proves otherwise. Never invent a Foundry Gemini route, infer a provider from an unprefixed model name, silently remove a provider prefix, or substitute a paid model without authorization.
+Gemini 3.8 Flash and GPT-5.6 Sol are **retired for fresh allocation/admission**, including explicit requests. Historical v4 assignments remain readable but cannot be re-admitted; create a new v5 assignment after separately rechecking the original task identity and acceptance boundary. Do not silently remap a previous route. Terra has no route.
 
-## Execute
+Read `token-mizer-budget` before built-in use or any other paid route. The public policy example defaults `github_models.builtin_uncapped_opt_in` to false. Only the current user's explicit *private local* opt-in authorizes uncapped automatic routing of the exact three allowed built-in models. It does not authorize arbitrary built-ins, bypass actor permissions, or assert a hard dollar ceiling. All other paid routes retain the dated, metered spending gate. DeepSeek is Foundry and has no implied GitHub billing approval.
 
-1. Keep work requiring five or fewer direct tool calls in the inherited coordinator only when its context capacity and route eligibility are established. Small work is not exempt from context checks; large-context work excludes every Foundry path.
-2. Estimate total context before delegation: instructions, tool schemas, conversation history, evidence, expected output, and headroom. Check current coordinator context before overflow. Use host-reported capacity when available; unknown capacity is not a fit. Apply this context-fit eligibility before alternation or cost preference.
-3. Check the current coordinator too. An instruction-only selected agent cannot change its host model or context window. If the coordinator is unsuitable, recommend or start an authorized GitHub session with a compact, lossless handoff; routing one child does not enlarge the parent.
-4. Prefer a provider-qualified Astra coordinator selected by the user before Token Mizer. Keep Astra planning and narration compact, avoid repeated reads, and retain hard or high-risk decisions.
-5. For substantial bounded implementation or build work, evaluate proactive Gemini eligibility under `token-mizer-budget` only after context fit. The five-minute capacity threshold does not apply to this proactive route.
-6. If both Gemini and Luna are available, authorized, and context-fitting, alternate using the durable assignment helper. If Flash is blocked for a large-context task, block and explain the missing budget or capacity permission. Never silently fall back to Luna or invent a premium route.
-7. If only Luna is context-fitting, use it for ordinary work. Sol is never an automatic fallback. Use it only when the user explicitly selects Sol.
-8. After a failed first implementation or fix, use `provider.escalation_model` for a bounded rubber-duck diagnosis with the reproduction, evidence, and unresolved question. In the bounded-RUG pilot, that diagnosis may authorize the single repair attempt; a second failed verification blocks further automatic implementation.
-9. Delegate self-contained work using `token-mizer-handoff`. Prefer one worker and parallelize only independent work with measurable benefit.
+Operational allocator requests supply `paid_policy: {"builtin_uncapped_opt_in": true, "source": "local"}` only after reading the user's genuine private opt-in; absence/false blocks built-ins. Supply verified host `route_evidence` bound to family/provider/runtime, capacity and actor authorization. Urgent Grok additionally needs `intent_evidence: {"kind": "urgent", "source": "user", "evidence_reference": "<actual user request>"}`. Astra uses kind `hard-diagnosis` or `failed-first-fix`, source `user` or `host`, and an actual evidence reference. DeepSeek requires `path: "deepseek-pilot"`, `task_class: "deployment-repair"`, a builder role, and user-sourced intent with kind `deployment-repair-pilot`, nonempty evidence reference, `bounded_attempts: 1`, and `reproduction`, `ci`, `live_verification` all true. The helper validates annotations, not their truth: verify them at dispatch and enforce the one-attempt bound in the caller. Select then freshly admit; use only `handoff.selected_runtime_id`, never cached admission or `selected_model`. A handoff is not an execution lease, spending reservation, or proof that the host accepted the model.
 
-Keep `role`, `family`, `provider`, and `runtime_id` separate. Pool alternatives perform the same task role with distinct routes. GitHub may use bare `gemini-3.8-flash` or its verified host-qualified identity; Foundry IDs must be connection-qualified. Allocate an immutable identity, then freshly admit immediately before each host invocation, revalidating current availability, authorization, context and exact role/provider/family/runtime. Use the returned `handoff.selected_runtime_id`, never `selected_model` or a cached handoff. There is no allocator spawn command, money reservation or exactly-once execution guarantee. The helper validates supplied annotations only; it does not discover host truth or enforce budget. Record task identity/class/boundary, context/capacity evidence, exclusions, intended and observed routes, outcome and evidence. Record cumulative nondecreasing counters with unique immutable event IDs; unknown measurements are not zero. Export historical evidence with an exclusive UTC cutoff. Keep runtime/provider IDs and private policy values out of shared diagnostics. Do not claim randomized or fair comparison when context, authorization or budget constrained selection.
+DeepSeek candidates additionally require `capacity_evidence` with `source: "host"`, `verified: true`, the exact qualified `runtime_id`, and an observed integer `context_capacity` matching the candidate. The allocator durably permits only one pilot assignment for a task ID and one fresh pilot admission; a new ID cannot reset that attempt within the same state. The caller must still verify that the host evidence is genuine.
 
-## Policy-gated paid routes
+Do not rotate routes just to balance counts. A large-context task cannot silently use Foundry Luna. Keep tasks requiring five or fewer calls in a suitable inherited coordinator. Delegate only self-contained substantial work; preserve specialist agents, approvals, original task identity, and acceptance target. Reproduce reported bugs through the closest feasible user flow. After a failed first fix, conduct a bounded Astra rubber-duck diagnosis; in the opted-in bounded-RUG workflow permit at most one diagnosed repair, then block if verification fails again. Run the applicable repository-wide CI-equivalent checks and affected-package tests; edited-file checks alone are insufficient.
 
-Keep these routes separate:
+Classify authentication/environment, provider configuration, capacity, and task failures separately. Credential errors stop inference with recovery guidance, never automatic login or provider substitution. Only explicit 429/TPM/quota/capacity evidence enables contention retries. On a constrained Foundry connection use one active worker, reuse its checkpoint, respect `Retry-After`, and allow at most three retries/five minutes cumulative waiting. Do not launch duplicate sessions or silently treat a shared connection switch as independent capacity. Five minutes of observed Foundry throttling makes a distinct paid capacity route *eligible for evaluation*, never approved. Report missing proof and stop rather than polling or promising an unscheduled retry.
 
-- **Proactive Gemini builder:** does not require prior Foundry throttling, but does require a valid nonzero policy, authoritative account-wide spend and pending-commitment data, enforceable bounded in-flight spend, a bounded task allowance, confirmed context fit, and any required explicit approval. User preference authorizes consideration, not unmetered use. Missing, expired, zero-valued, or unenforceable policy blocks Gemini. For large-context work, that block is a hard stop rather than a Luna fallback.
-- **Capacity fallback:** becomes eligible for evaluation only after five minutes of evidenced Foundry rate-limit blocking. It still requires every spending gate above. Proactive Gemini preference must not bypass this threshold for a separate capacity incident.
-
-Each paid decision is valid for one bounded assignment. Record policy eligibility, approval, attempted route, accepted runtime ID, actual observed use, and outcome as separate facts.
-
-## Failure classification and shared capacity
-
-Classify the failure before retrying:
-
-- **Authentication or environment:** credential errors, unavailable Azure CLI tokens, missing login, invalid tenant, or inaccessible credential helpers are not throttling. Stop repeated inference immediately. Report the exact recovery action, such as installing Azure CLI or asking the user to run `az login`, without performing login automatically or exposing tokens. Do not switch to a paid provider.
-- **Unavailable provider or model:** rejected connection IDs, unsupported runtime IDs, and missing catalog entries require configuration recovery. Do not infer another provider from the model name. An unavailable Gemini route falls back honestly to Foundry Luna for ordinary context-fitting work; large-context work blocks if GitHub capacity is unavailable.
-- **Capacity contention:** only explicit 429, TPM, quota, capacity, or documented throttling responses qualify. Treat Sol, Astra, and Luna on the same connection as potentially sharing one constrained pool. Switching Foundry models is not a guaranteed workaround.
-- **Task failure:** tool, test, or reasoning failures are not provider capacity failures. Follow the normal fix and escalation policy.
-
-For capacity contention, allow one active worker per constrained connection. Reuse the existing session and checkpoints; do not launch duplicate workers, poll, or create replacement sessions. Respect `Retry-After`. Without one, use bounded backoff with no more than three retries and no more than five minutes of cumulative waiting. If the next required delay exceeds that bound, stop instead of ignoring it. The coordinator should yield rather than consume the same provider pool while a worker waits.
-
-If blocked beyond the retry bound, report the evidence and request or await an explicit resume or a genuinely scheduled wake-up. A prompt cannot create an account-wide lock or retry a model call while the agent itself cannot run. Never promise background retries that the host did not schedule.
-
-## Quality
-
-Reproduce reported bugs through the closest feasible user flow before editing. Verify changed behavior and relevant regression checks. Before accepting delegated code, require the same applicable repository-wide gates CI runs, including affected-package coverage for shared changes. Edited-file tests alone are insufficient evidence. Run deterministic gates first. Add independent review only for substantial, risky, or previously failed work, never universally per file and never when Forge or another validator already provides equivalent evidence. Research claims need sources. Report outcomes, verification, and remaining uncertainty concisely.
+Keep private policy/provider IDs out of shared diagnostics. Record policy eligibility, approval, attempted and accepted runtime, actual observed use, verified outcome, and unknown measurements separately. Historical reports can label retired routes without suggesting fresh eligibility.

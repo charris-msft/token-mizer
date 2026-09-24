@@ -12,9 +12,16 @@ LUNA_MODEL = "gpt-5.6-luna"
 FLASH_MODEL = "gemini-3.8-flash"
 SOL_MODEL = "gpt-5.6-sol"
 ASTRA_MODEL = "gpt-6-astra"
-STATE_VERSION = "4.0"
-FAMILIES = {"luna": ("Foundry", LUNA_MODEL), "sol": ("Foundry", SOL_MODEL),
-            "astra": ("Foundry", ASTRA_MODEL), "flash": ("GitHub", FLASH_MODEL)}
+BUILTIN_SOL_MODEL = "gpt-6-sol"
+GROK_MODEL = "grok-4.7"
+DEEPSEEK_MODEL = "DeepSeek-V4.1-Flash"
+STATE_VERSION = "5.0"
+LEGACY_FAMILIES = {"luna": ("Foundry", LUNA_MODEL), "sol": ("Foundry", SOL_MODEL),
+                   "astra": ("Foundry", ASTRA_MODEL), "flash": ("GitHub", FLASH_MODEL)}
+FAMILIES = {"luna": ("Foundry", LUNA_MODEL), "sol6": ("GitHub", BUILTIN_SOL_MODEL),
+            "astra": ("GitHub", ASTRA_MODEL), "grok": ("GitHub", GROK_MODEL),
+            "deepseek": ("Foundry", DEEPSEEK_MODEL)}
+BUILTIN_FAMILIES = {"sol6", "astra", "grok"}
 ROLES = {"coordinator", "builder", "reviewer", "validator"}
 class AssignmentBlocked(RuntimeError): pass
 
@@ -68,6 +75,7 @@ ALLOCATION_FIELDS = (
     "selection_reason", "selected_role", "selected_family", "selected_provider",
     "selected_runtime_id", "selected_model", "route_evidence", "eligibility", "created_at",
 )
+CURRENT_FIELDS = ALLOCATION_FIELDS + ("paid_policy", "intent_evidence", "capacity_evidence")
 
 
 def _counter(value):
@@ -98,7 +106,8 @@ def _outcome_payload(outcome, actual_provider, actual_runtime_id, actual_model, 
 
 
 def _project(allocation, events):
-    result = {key: deepcopy(allocation[key]) for key in ALLOCATION_FIELDS}
+    result = {key: deepcopy(allocation[key]) for key in
+              (CURRENT_FIELDS if "paid_policy" in allocation else ALLOCATION_FIELDS)}
     result.update(attempts=None, reassignments=None, outcome="unknown", verification="unverified",
                   actual_provider="unknown", actual_runtime_id="unknown", actual_model="unknown",
                   evidence=[], target_revision=None, target_environment=None, admission_status="unknown")
@@ -123,25 +132,29 @@ def _project(allocation, events):
 
 
 def _validate_state(state):
-    if not isinstance(state, dict) or state.get("schema_version") != STATE_VERSION or not isinstance(state.get("assignments"), dict) or not isinstance(state.get("events"), list):
+    if not isinstance(state, dict) or state.get("schema_version") not in {STATE_VERSION, "4.0"} or not isinstance(state.get("assignments"), dict) or not isinstance(state.get("events"), list):
         raise ValueError("invalid assignment state")
+    legacy = state["schema_version"] == "4.0"
+    fields = ALLOCATION_FIELDS if legacy else CURRENT_FIELDS
     _counter(state.get("next_slot")); _counter(state.get("next_event_id"))
     seen = set(); allocated = set(); previous = None
     for aid, allocation in state["assignments"].items():
-        if not isinstance(allocation, dict) or any(k not in allocation for k in ALLOCATION_FIELDS) or allocation["assignment_id"] != aid:
+        if not isinstance(allocation, dict) or any(k not in allocation for k in fields) or allocation["assignment_id"] != aid:
             raise ValueError("invalid allocation metadata")
         _time(allocation["created_at"])
-        _request({key: allocation[key] for key in ("assignment_id", "task_id", "task_class", "acceptance_boundary", "required_context", "large_context", "path", "explicit_model", "explicit_provider", "explicit_role")} | {"candidates": allocation["eligibility"]})
+        _request({key: allocation[key] for key in ("assignment_id", "task_id", "task_class", "acceptance_boundary", "required_context", "large_context", "path", "explicit_model", "explicit_provider", "explicit_role")} | {"candidates": allocation["eligibility"], "paid_policy": allocation.get("paid_policy"), "intent_evidence": allocation.get("intent_evidence")}, legacy=legacy)
         for key in ("selected_role", "selected_family", "selected_provider", "selected_runtime_id", "selected_model", "selection_reason"):
             _text(allocation[key], key)
         route = _candidate({"role": allocation["selected_role"], "family": allocation["selected_family"],
                             "provider": allocation["selected_provider"], "runtime_id": allocation["selected_runtime_id"],
-                            "route_evidence": allocation["route_evidence"]}, allocation["required_context"],
+                            "route_evidence": allocation["route_evidence"],
+                            "capacity_evidence": allocation.get("capacity_evidence")}, allocation["required_context"],
                            allocation["explicit_model"], allocation["explicit_provider"], allocation["explicit_role"],
-                           allocation["large_context"], allocation["path"])
-        if allocation["selected_model"] != FAMILIES[route["family"]][1]: raise ValueError("invalid selected model")
+                           allocation["large_context"], allocation["path"], allocation.get("paid_policy"),
+                           allocation.get("intent_evidence"), allocation["task_class"], legacy=legacy)
+        if allocation["selected_model"] != (LEGACY_FAMILIES if legacy else FAMILIES)[route["family"]][1]: raise ValueError("invalid selected model")
         if allocation["large_context"] and route["provider"] == "Foundry": raise ValueError("large-context excludes Foundry")
-        if route["family"] in {"sol", "astra"} and allocation["explicit_model"] != route["runtime_id"]:
+        if legacy and route["family"] in {"sol", "astra"} and allocation["explicit_model"] != route["runtime_id"]:
             raise ValueError(f"{route['family'].capitalize()} requires explicit runtime")
         if allocation["explicit_model"] not in {None, route["runtime_id"]} or allocation["explicit_provider"] not in {None, route["provider"]}:
             raise ValueError("selected route conflicts with explicit request")
@@ -149,9 +162,11 @@ def _validate_state(state):
         for item in allocation["eligibility"]:
             if not isinstance(item, dict) or not isinstance(item.get("eligible"), bool): raise ValueError("invalid eligibility")
             normalized.append({**item, "available": item["eligible"], "authorized": item["eligible"]})
-        pool = _pool(normalized, allocation["required_context"], allocation["explicit_model"], allocation["explicit_provider"], allocation["explicit_role"], allocation["large_context"], allocation["path"])
+        pool = _pool(normalized, allocation["required_context"], allocation["explicit_model"], allocation["explicit_provider"], allocation["explicit_role"], allocation["large_context"], allocation["path"], allocation.get("paid_policy"), allocation.get("intent_evidence"), allocation["task_class"], legacy=legacy)
         selected = _match(allocation, pool)
-        if not selected or not selected["eligible"] or selected["route_evidence"] != allocation["route_evidence"]:
+        if (not selected or not selected["eligible"] or
+            selected["route_evidence"] != allocation["route_evidence"] or
+            (not legacy and selected["capacity_evidence"] != allocation["capacity_evidence"])):
             raise ValueError("selected route must match eligible allocation evidence")
     for event in state["events"]:
         if not isinstance(event, dict): raise ValueError("invalid event")
@@ -197,7 +212,8 @@ def _load(path: Path):
     except (OSError, json.JSONDecodeError) as e: raise ValueError(f"invalid assignment state: {e}") from e
     _validate_state(state)
     # Older v4 files may contain mutable snapshots. Never trust those fields.
-    state["assignments"] = {aid: {key: value[key] for key in ALLOCATION_FIELDS} for aid, value in state["assignments"].items()}
+    fields = ALLOCATION_FIELDS if state["schema_version"] == "4.0" else CURRENT_FIELDS
+    state["assignments"] = {aid: {key: value[key] for key in fields} for aid, value in state["assignments"].items()}
     return state
 
 def _event(state: dict[str, Any], typ: str, aid: str, at: str, event_id: str | None = None, **extra):
@@ -217,35 +233,71 @@ def _runtime(raw: dict[str, Any], provider: str, family: str, model: str) -> str
         if not runtime.endswith("/" + model): raise AssignmentBlocked("runtime_id does not match model")
     return runtime
 
-def _candidate(raw: Any, required: int, explicit_model: str|None, explicit_provider: str|None, explicit_role: str|None, large: bool, path: str):
+def _candidate(raw: Any, required: int, explicit_model: str|None, explicit_provider: str|None, explicit_role: str|None, large: bool, path: str,
+               paid_policy=None, intent_evidence=None, task_class=None, *, legacy=False):
     if not isinstance(raw, dict): raise ValueError("candidate must be an object")
     role = _text(raw.get("role"), "candidate role"); family = _text(raw.get("family"), "candidate family").lower(); provider = _text(raw.get("provider"), "candidate provider")
     if role not in ROLES: raise AssignmentBlocked("unknown candidate role")
-    if family not in FAMILIES: raise AssignmentBlocked("unknown candidate family")
+    families = LEGACY_FAMILIES if legacy else FAMILIES
+    if family not in families: raise AssignmentBlocked("unknown or retired candidate family")
     if explicit_role and role != explicit_role: raise AssignmentBlocked("explicit role conflict")
-    expected_provider, model = FAMILIES[family]
+    expected_provider, model = families[family]
     if provider != expected_provider: raise AssignmentBlocked("family/provider correspondence is invalid")
     runtime = _runtime(raw, provider, family, model)
     evidence = raw.get("route_evidence")
     if not isinstance(evidence, dict) or evidence.get("verified") is not True or evidence.get("source") not in {"host", "local"}: raise AssignmentBlocked("verified host or local route evidence is required")
     if evidence.get("runtime_id") != runtime or evidence.get("provider", provider) != provider or evidence.get("family", family) != family: raise AssignmentBlocked("route evidence does not bind runtime identity")
+    if not legacy and provider == "GitHub" and (
+        evidence.get("provider") != provider or evidence.get("family") != family or
+        evidence.get("source") != "host"
+    ):
+        raise AssignmentBlocked("fresh route needs host-backed provider and family evidence for built-in models")
     cap = raw.get("context_capacity"); fit = isinstance(cap, int) and not isinstance(cap, bool) and cap >= required
+    capacity_evidence = raw.get("capacity_evidence")
     reasons = []
     if raw.get("available") is not True: reasons.append("unavailable")
     if raw.get("authorized") is not True: reasons.append("unauthorized")
     if not fit: reasons.append("context-fit-unknown-or-insufficient")
-    if family == "sol" and explicit_model != runtime: reasons.append("explicit-user-override-required"); fit = False
-    if family == "astra" and explicit_model != runtime: reasons.append("explicit-policy-route-required"); fit = False
+    if legacy:
+        if family == "sol" and explicit_model != runtime: reasons.append("explicit-user-override-required"); fit = False
+        if family == "astra" and explicit_model != runtime: reasons.append("explicit-policy-route-required"); fit = False
+    else:
+        if family in BUILTIN_FAMILIES and paid_policy != {"builtin_uncapped_opt_in": True, "source": "local"}:
+            reasons.append("explicit-local-builtin-opt-in-required"); fit = False
+        kind = intent_evidence.get("kind") if isinstance(intent_evidence, dict) else None
+        source = intent_evidence.get("source") if isinstance(intent_evidence, dict) else None
+        reference = intent_evidence.get("evidence_reference") if isinstance(intent_evidence, dict) else None
+        if family == "grok" and not (kind == "urgent" and source == "user" and isinstance(reference, str) and reference.strip()):
+            reasons.append("explicit-urgent-user-evidence-required"); fit = False
+        if family == "astra" and not (kind in {"hard-diagnosis", "failed-first-fix"} and source in {"user", "host"} and isinstance(reference, str) and reference.strip()):
+            reasons.append("hard-diagnosis-or-failed-first-fix-evidence-required"); fit = False
+        if family == "deepseek" and not (
+            path == "deepseek-pilot" and role == "builder" and task_class == "deployment-repair"
+            and kind == "deployment-repair-pilot" and source == "user"
+            and isinstance(reference, str) and reference.strip()
+            and all(intent_evidence.get(k) is True for k in ("reproduction", "ci", "live_verification"))
+            and type(intent_evidence.get("bounded_attempts")) is int and intent_evidence["bounded_attempts"] == 1
+        ):
+            reasons.append("bounded-deployment-repair-pilot-required"); fit = False
+        if family == "deepseek" and not (
+            isinstance(capacity_evidence, dict) and capacity_evidence.get("source") == "host"
+            and capacity_evidence.get("verified") is True
+            and capacity_evidence.get("runtime_id") == runtime
+            and capacity_evidence.get("context_capacity") == cap
+        ):
+            reasons.append("host-verified-pilot-capacity-required"); fit = False
+        if path == "deepseek-pilot" and family != "deepseek":
+            reasons.append("pilot-route-conflict"); fit = False
     if large and provider == "Foundry": reasons.append("large-context-excludes-Foundry"); fit = False
     if path in {"coordinator", "astra"} and large and provider == "Foundry": fit = False
     if explicit_model is not None and runtime != explicit_model: reasons.append("explicit-runtime-conflict"); fit = False
     if explicit_provider is not None and provider != explicit_provider: reasons.append("explicit-provider-conflict"); fit = False
-    return {"role": role, "family": family, "provider": provider, "runtime_id": runtime, "route_evidence": deepcopy(evidence), "context_capacity": cap if isinstance(cap, int) else "unknown", "eligible": raw.get("available") is True and raw.get("authorized") is True and fit, "reasons": reasons or ["context-fit-confirmed"]}
+    return {"role": role, "family": family, "provider": provider, "runtime_id": runtime, "route_evidence": deepcopy(evidence), "capacity_evidence": deepcopy(capacity_evidence), "context_capacity": cap if isinstance(cap, int) else "unknown", "eligible": raw.get("available") is True and raw.get("authorized") is True and fit, "reasons": reasons or ["context-fit-confirmed"]}
 
 def _identity(a): return (a["task_id"], a["task_class"], a["acceptance_boundary"], a["required_context"], a["large_context"])
 
-def _request(kwargs):
-    allowed = {"assignment_id", "task_id", "task_class", "acceptance_boundary", "required_context", "candidates", "explicit_model", "explicit_provider", "explicit_role", "large_context", "path", "now"}
+def _request(kwargs, *, legacy=False):
+    allowed = {"assignment_id", "task_id", "task_class", "acceptance_boundary", "required_context", "candidates", "explicit_model", "explicit_provider", "explicit_role", "large_context", "path", "now", "paid_policy", "intent_evidence"}
     if set(kwargs) - allowed: raise ValueError("unknown request fields: " + ", ".join(sorted(set(kwargs) - allowed)))
     aid, tid, tc, ab = (_text(kwargs[k], k.replace("_", " ")) for k in ("assignment_id", "task_id", "task_class", "acceptance_boundary"))
     rc = kwargs.get("required_context")
@@ -257,11 +309,15 @@ def _request(kwargs):
     explicit_role = _text(kwargs["explicit_role"], "explicit role") if kwargs.get("explicit_role") is not None else None
     path = kwargs.get("path", "direct"); large = kwargs.get("large_context", False)
     if not isinstance(large, bool): raise ValueError("large_context must be boolean")
-    if path not in {"direct", "coordinator", "astra"}: raise ValueError("invalid assignment path")
-    return aid, tid, tc, ab, rc, candidates, explicit_model, explicit_provider, explicit_role, large, path
+    if path not in ({"direct", "coordinator", "astra"} if legacy else {"direct", "coordinator", "astra", "deepseek-pilot"}): raise ValueError("invalid assignment path")
+    policy, intent = kwargs.get("paid_policy"), kwargs.get("intent_evidence")
+    if policy is not None and (not isinstance(policy, dict) or set(policy) != {"builtin_uncapped_opt_in", "source"} or type(policy["builtin_uncapped_opt_in"]) is not bool or policy["source"] != "local"):
+        raise ValueError("invalid paid_policy; explicit local opt-in required for uncapped built-in use")
+    if intent is not None and not isinstance(intent, dict): raise ValueError("intent_evidence must be an object")
+    return aid, tid, tc, ab, rc, candidates, explicit_model, explicit_provider, explicit_role, large, path, policy, intent
 
-def _pool(candidates, rc, em, ep, er, large, path):
-    items = [_candidate(c, rc, em, ep, er, large, path) for c in candidates]
+def _pool(candidates, rc, em, ep, er, large, path, policy=None, intent=None, task_class=None, *, legacy=False):
+    items = [_candidate(c, rc, em, ep, er, large, path, policy, intent, task_class, legacy=legacy) for c in candidates]
     routes = [(x["family"], x["provider"], x["runtime_id"]) for x in items]
     if len(set(routes)) != len(routes): raise AssignmentBlocked("duplicate or conflicting pool routes are rejected")
     if len({x["role"] for x in items}) != 1: raise AssignmentBlocked("pool candidates must perform the same task role")
@@ -282,46 +338,65 @@ def _match(allocation, items):
 
 
 def select_assignment(state_path: str|Path, **kwargs):
-    aid, tid, tc, ab, rc, candidates, em, ep, er, large, path = _request(kwargs)
+    aid, tid, tc, ab, rc, candidates, em, ep, er, large, path, policy, intent = _request(kwargs)
     file = Path(state_path).expanduser().resolve()
     with _lock(file):
         state = _load(file); at = _timestamp(kwargs.get("now")); prior = state["assignments"].get(aid)
+        if state["schema_version"] == "4.0":
+            raise AssignmentBlocked("v4 assignments are historical; fresh selection requires a new v5 state file")
         if prior:
             _resume_check(prior, (tid, tc, ab, rc, large), em, ep, er, path)
-            current = _pool(candidates, rc, prior["explicit_model"], prior["explicit_provider"], prior["explicit_role"], large, path)
+            if policy != prior["paid_policy"] or intent != prior["intent_evidence"]:
+                raise AssignmentBlocked("changed policy or intent conflicts with immutable assignment")
+            current = _pool(candidates, rc, prior["explicit_model"], prior["explicit_provider"], prior["explicit_role"], large, path, policy, intent, tc)
             match = _match(prior, current)
             if not match or not match["eligible"]:
                 _event(state, "reuse-blocked", aid, at, reason="current admission failed"); _save(file, state)
                 raise AssignmentBlocked("resume blocked; historical assignment preserved")
             return _project(prior, state["events"])
-        items = _pool(candidates, rc, em, ep, er, large, path)
+        if path == "deepseek-pilot" and any(a["task_id"] == tid for a in state["assignments"].values()):
+            raise AssignmentBlocked("DeepSeek pilot task already has an immutable assignment; a second attempt is forbidden")
+        items = _pool(candidates, rc, em, ep, er, large, path, policy, intent, tc)
         eligible = [x for x in items if x["eligible"]]
         if not eligible:
-            detail = "large-context-requires-GitHub" if large else "no authorized, available, verified model has confirmed sufficient context capacity"
+            detail = ("large-context-requires-GitHub" if large else
+                      "pilot requires host-verified known capacity, authorization and a bounded repair contract"
+                      if path == "deepseek-pilot" else
+                      "no authorized, available, verified model has confirmed sufficient context capacity")
             raise AssignmentBlocked(detail)
         if em is not None:
             chosen = next((x for x in eligible if x["runtime_id"] == em), None)
-            reason = "explicit-policy-astra" if chosen and chosen["family"] == "astra" else "explicit-user-model"
+            reason = "explicit-verified-route"
         else:
-            flash = [x for x in eligible if x["family"] == "flash"]; luna = [x for x in eligible if x["family"] == "luna"]
-            pool = flash + luna; chosen = pool[state.get("next_slot", 0) % len(pool)] if pool else None
-            if flash and luna: state["next_slot"] += 1; reason = "alternating-context-fitting-pool"
-            else: reason = "only-context-fitting-authorized-candidate"
+            kind = intent.get("kind") if isinstance(intent, dict) else None
+            preference = ("deepseek",) if path == "deepseek-pilot" else (
+                ("grok", "sol6", "luna") if kind == "urgent" else
+                ("astra", "sol6", "luna") if kind in {"hard-diagnosis", "failed-first-fix"} else
+                ("sol6", "luna"))
+            chosen = next((x for family in preference for x in eligible if x["family"] == family), None)
+            reason = "context-fit-policy-preference"
         if not chosen: raise AssignmentBlocked("explicit runtime, role, or provider is unavailable, unauthorized, unverified, or does not fit")
-        result = {"assignment_id": aid, "task_id": tid, "task_class": tc, "acceptance_boundary": ab, "required_context": rc, "large_context": large, "path": path, "explicit_model": em, "explicit_provider": ep, "explicit_role": er, "selection_reason": reason, "selected_role": chosen["role"], "selected_family": chosen["family"], "selected_provider": chosen["provider"], "selected_runtime_id": chosen["runtime_id"], "selected_model": FAMILIES[chosen["family"]][1], "route_evidence": deepcopy(chosen["route_evidence"]), "eligibility": items, "created_at": at}
+        result = {"assignment_id": aid, "task_id": tid, "task_class": tc, "acceptance_boundary": ab, "required_context": rc, "large_context": large, "path": path, "explicit_model": em, "explicit_provider": ep, "explicit_role": er, "paid_policy": deepcopy(policy), "intent_evidence": deepcopy(intent), "capacity_evidence": deepcopy(chosen["capacity_evidence"]), "selection_reason": reason, "selected_role": chosen["role"], "selected_family": chosen["family"], "selected_provider": chosen["provider"], "selected_runtime_id": chosen["runtime_id"], "selected_model": FAMILIES[chosen["family"]][1], "route_evidence": deepcopy(chosen["route_evidence"]), "eligibility": items, "created_at": at}
         state["assignments"][aid] = result
         _event(state, "allocated", aid, at, identity={"task_id": tid, "task_class": tc, "acceptance_boundary": ab, "required_context": rc, "large_context": large})
         _save(file, state)
         return _project(result, state["events"])
 
 def admit_assignment(state_path: str|Path, **kwargs):
-    aid, tid, tc, ab, rc, candidates, em, ep, er, large, path = _request(kwargs)
+    aid, tid, tc, ab, rc, candidates, em, ep, er, large, path, policy, intent = _request(kwargs)
     file = Path(state_path).expanduser().resolve()
     with _lock(file):
         state = _load(file); at = _timestamp(kwargs.get("now")); allocation = state["assignments"].get(aid)
+        if state["schema_version"] == "4.0": raise AssignmentBlocked("v4 assignments cannot be freshly admitted")
         if not allocation: raise AssignmentBlocked("assignment must be allocated before admission")
         _resume_check(allocation, (tid, tc, ab, rc, large), em, ep, er, path)
-        items = _pool(candidates, rc, allocation["explicit_model"], allocation["explicit_provider"], allocation["explicit_role"], large, path)
+        if policy != allocation["paid_policy"] or intent != allocation["intent_evidence"]:
+            raise AssignmentBlocked("changed policy or intent conflicts with immutable assignment")
+        if allocation["selected_family"] == "deepseek" and any(
+            event["type"] == "admitted" and event["assignment_id"] == aid for event in state["events"]
+        ):
+            raise AssignmentBlocked("DeepSeek pilot permits only one fresh implementation admission")
+        items = _pool(candidates, rc, allocation["explicit_model"], allocation["explicit_provider"], allocation["explicit_role"], large, path, policy, intent, tc)
         match = _match(allocation, items)
         if not match or not match["eligible"]:
             _event(state, "admission-blocked", aid, at, reason="current availability/authorization/context or route mismatch")
